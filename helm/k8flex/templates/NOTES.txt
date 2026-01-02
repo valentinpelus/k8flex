@@ -1,0 +1,88 @@
+🎉 K8flex AI Debug Agent has been deployed!
+
+📊 Release Information:
+  Name:      {{ .Release.Name }}
+  Namespace: {{ .Release.Namespace }}
+  Version:   {{ .Chart.Version }}
+
+🔍 Get the application status:
+  kubectl get pods -n {{ .Release.Namespace }} -l "app.kubernetes.io/name={{ include "k8flex.name" . }},app.kubernetes.io/instance={{ .Release.Name }}"
+
+📝 View logs:
+  kubectl logs -n {{ .Release.Namespace }} deployment/{{ include "k8flex.fullname" . }} -f
+
+🌐 Service endpoint (internal):
+  http://{{ include "k8flex.fullname" . }}.{{ .Release.Namespace }}.svc.cluster.local:{{ .Values.service.port }}/webhook
+
+⚙️  Configuration:
+  - Ollama URL: {{ .Values.config.ollama.url }}
+  - Ollama Model: {{ .Values.config.ollama.model }}
+{{- if or .Values.slack.botToken .Values.slack.webhookUrl }}
+  - Slack: ✅ Enabled
+  {{- if .Values.slack.botToken }}
+  - Threading: ✅ Supported (Bot token)
+  {{- else }}
+  - Threading: ⚠️  Not supported (Webhook only)
+  {{- end }}
+{{- else }}
+  - Slack: ⚠️  Not configured
+{{- end }}
+
+📚 Next Steps:
+
+{{- if not (or .Values.slack.botToken .Values.slack.webhookUrl) }}
+
+1. Configure Slack Integration:
+   
+   For threading support (recommended):
+   helm upgrade {{ .Release.Name }} ./helm/k8flex \
+     --namespace {{ .Release.Namespace }} \
+     --set slack.botToken="xoxb-YOUR-BOT-TOKEN" \
+     --set slack.channelId="C01234567890"
+
+   OR use webhook (no threading):
+   helm upgrade {{ .Release.Name }} ./helm/k8flex \
+     --namespace {{ .Release.Namespace }} \
+     --set slack.webhookUrl="https://hooks.slack.com/services/..."
+
+{{- end }}
+
+2. Configure Alertmanager to send webhooks:
+   Add this receiver to your Alertmanager configuration:
+
+   🔐 First, get your webhook authentication token:
+   kubectl get secret {{ include "k8flex.fullname" . }}-secrets -n {{ .Release.Namespace }} -o jsonpath='{.data.WEBHOOK_AUTH_TOKEN}' | base64 -d && echo
+
+   Then configure Alertmanager:
+   receivers:
+     - name: 'k8flex-ai-debug'
+       webhook_configs:
+         - url: 'http://{{ include "k8flex.fullname" . }}.{{ .Release.Namespace }}.svc.cluster.local:{{ .Values.service.port }}/webhook'
+           send_resolved: false
+           http_config:
+             authorization:
+               credentials: "<PASTE_YOUR_TOKEN_HERE>"
+
+3. Ensure Ollama is deployed:
+   kubectl get service ollama -n ollama
+
+4. Test the webhook with authentication:
+   TOKEN=$(kubectl get secret {{ include "k8flex.fullname" . }}-secrets -n {{ .Release.Namespace }} -o jsonpath='{.data.WEBHOOK_AUTH_TOKEN}' | base64 -d)
+   
+   kubectl run test-webhook --rm -i --restart=Never --image=curlimages/curl -- \
+     curl -X POST http://{{ include "k8flex.fullname" . }}.{{ .Release.Namespace }}.svc.cluster.local:{{ .Values.service.port }}/webhook \
+     -H "Authorization: Bearer $TOKEN" \
+     -H "Content-Type: application/json" \
+     -d '{"alerts":[{"status":"firing","labels":{"alertname":"Test"},"annotations":{"summary":"Test"}}]}'
+
+📖 Documentation:
+   - README: https://github.com/yourorg/k8flex
+   - Webhook Security: See WEBHOOK_SECURITY.md
+   - Slack Setup: See SLACK_SETUP.md
+   - Integration Guide: See INTEGRATION.md
+
+🐛 Troubleshooting:
+   kubectl logs -n {{ .Release.Namespace }} deployment/{{ include "k8flex.fullname" . }}
+   kubectl describe pod -n {{ .Release.Namespace }} -l "app.kubernetes.io/name={{ include "k8flex.name" . }}"
+
+Happy debugging! 🚀

@@ -1,0 +1,25 @@
+{
+  "version": "4",
+  "groupKey": "test-group",
+  "status": "firing",
+  "receiver": "k8flex-ai-debug",
+  "alerts": [
+    {
+      "status": "firing",
+      "labels": {
+        "alertname": "PodNotReady",
+        "severity": "critical",
+        "namespace": "ollama",
+        "pod": "ollama-6995fbbcc4-2mszc",
+        "service": "ollama"
+      },
+      "annotations": {
+        "summary": "Pod is not responding",
+        "description": "The pod has failed readiness checks"
+      },
+      "startsAt": "2026-01-02T10:00:00Z",
+      "endsAt": "0001-01-01T00:00:00Z",
+      "generatorURL": "http://prometheus:9090/graph"
+    }
+  ]
+}

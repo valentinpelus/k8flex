@@ -1,0 +1,1010 @@
+package main
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"fmt"
+	"io"
+	"log"
+	"net/http"
+	"os"
+	"strings"
+	"time"
+
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/rest"
+	"k8s.io/client-go/tools/clientcmd"
+)
+
+// AlertmanagerWebhook represents the webhook payload from Alertmanager
+// Reference: https://prometheus.io/docs/alerting/latest/configuration/#webhook_config
+type AlertmanagerWebhook struct {
+	Version  string  `json:"version"`
+	GroupKey string  `json:"groupKey"`
+	Status   string  `json:"status"`
+	Alerts   []Alert `json:"alerts"`
+}
+
+type Alert struct {
+	Status       string            `json:"status"`
+	Labels       map[string]string `json:"labels"`
+	Annotations  map[string]string `json:"annotations"`
+	StartsAt     time.Time         `json:"startsAt"`
+	EndsAt       time.Time         `json:"endsAt"`
+	GeneratorURL string            `json:"generatorURL"`
+}
+
+// OllamaRequest represents the request to Ollama API
+// Reference: https://github.com/ollama/ollama/blob/main/docs/api.md
+type OllamaRequest struct {
+	Model  string `json:"model"`
+	Prompt string `json:"prompt"`
+	Stream bool   `json:"stream"`
+}
+
+type OllamaResponse struct {
+	Model     string    `json:"model"`
+	CreatedAt time.Time `json:"created_at"`
+	Response  string    `json:"response"`
+	Done      bool      `json:"done"`
+}
+
+// SlackMessage represents a Slack webhook message
+// Reference: https://api.slack.com/messaging/webhooks
+type SlackMessage struct {
+	Channel     string       `json:"channel,omitempty"`
+	Text        string       `json:"text,omitempty"`
+	Blocks      []SlackBlock `json:"blocks,omitempty"`
+	ThreadTS    string       `json:"thread_ts,omitempty"`
+	UnfurlLinks bool         `json:"unfurl_links,omitempty"`
+}
+
+type SlackBlock struct {
+	Type     string            `json:"type"`
+	Text     *SlackTextObject  `json:"text,omitempty"`
+	Fields   []SlackTextObject `json:"fields,omitempty"`
+	Elements []SlackTextObject `json:"elements,omitempty"`
+}
+
+type SlackTextObject struct {
+	Type string `json:"type"`
+	Text string `json:"text"`
+}
+
+type SlackResponse struct {
+	OK      bool   `json:"ok"`
+	Error   string `json:"error,omitempty"`
+	TS      string `json:"ts,omitempty"`
+	Channel string `json:"channel,omitempty"`
+}
+
+type DebugResult struct {
+	Alert           Alert
+	PodLogs         string
+	PodDescription  string
+	EventsList      string
+	ServiceCheck    string
+	NetworkCheck    string
+	ResourceMetrics string
+	Analysis        string
+}
+
+var (
+	clientset       *kubernetes.Clientset
+	ollamaURL       string
+	ollamaModel     string
+	slackWebhookURL string
+	slackBotToken   string
+	slackChannelID  string
+)
+
+func main() {
+	// Initialize Kubernetes client
+	var err error
+	clientset, err = getKubernetesClient()
+	if err != nil {
+		log.Fatalf("Failed to create Kubernetes client: %v", err)
+	}
+
+	// Get Ollama configuration from environment
+	ollamaURL = getEnv("OLLAMA_URL", "http://ollama.ollama.svc.cluster.local:11434")
+	ollamaModel = getEnv("OLLAMA_MODEL", "llama2")
+	slackWebhookURL = getEnv("SLACK_WEBHOOK_URL", "")
+	slackBotToken = getEnv("SLACK_BOT_TOKEN", "")
+	slackChannelID = getEnv("SLACK_CHANNEL_ID", "")
+
+	port := getEnv("PORT", "8080")
+
+	http.HandleFunc("/webhook", webhookHandler)
+	http.HandleFunc("/health", healthHandler)
+
+	log.Printf("Starting AI Debug Agent on port %s", port)
+	log.Printf("Ollama URL: %s, Model: %s", ollamaURL, ollamaModel)
+	if slackBotToken != "" && slackChannelID != "" {
+		log.Printf("Slack notifications: enabled (Bot token with threading support)")
+	} else if slackWebhookURL != "" {
+		log.Printf("Slack notifications: enabled (Webhook - no threading)")
+	} else {
+		log.Printf("Slack notifications: disabled")
+	}
+
+	if err := http.ListenAndServe(":"+port, nil); err != nil {
+		log.Fatalf("Failed to start server: %v", err)
+	}
+}
+
+func webhookHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Only POST method is allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		log.Printf("Failed to read request body: %v", err)
+		http.Error(w, "Failed to read request body", http.StatusBadRequest)
+		return
+	}
+	defer r.Body.Close()
+
+	var webhook AlertmanagerWebhook
+	if err := json.Unmarshal(body, &webhook); err != nil {
+		log.Printf("Failed to parse webhook: %v", err)
+		http.Error(w, "Failed to parse webhook", http.StatusBadRequest)
+		return
+	}
+
+	log.Printf("Received webhook with %d alerts, status: %s", len(webhook.Alerts), webhook.Status)
+
+	// Process each alert asynchronously
+	go func() {
+		for _, alert := range webhook.Alerts {
+			if alert.Status == "firing" {
+				processAlert(alert)
+			}
+		}
+	}()
+
+	w.WriteHeader(http.StatusOK)
+	w.Write([]byte(`{"status":"accepted"}`))
+}
+
+func processAlert(alert Alert) {
+	log.Printf("Processing alert: %s", alert.Labels["alertname"])
+
+	// Extract parameters from alert labels
+	namespace := alert.Labels["namespace"]
+	podName := alert.Labels["pod"]
+	serviceName := alert.Labels["service"]
+
+	if namespace == "" {
+		log.Printf("Alert %s missing namespace label, skipping", alert.Labels["alertname"])
+		return
+	}
+
+	// Send alert to Slack FIRST before starting debug work
+	var slackThreadTS string
+	if slackWebhookURL != "" {
+		ts, err := sendAlertToSlack(alert)
+		if err != nil {
+			log.Printf("Failed to send alert to Slack: %v", err)
+		} else {
+			slackThreadTS = ts
+			log.Printf("Alert sent to Slack successfully")
+		}
+	}
+
+	ctx := context.Background()
+	result := DebugResult{Alert: alert}
+
+	var debugInfo strings.Builder
+	debugInfo.WriteString(fmt.Sprintf("=== AI-Powered Debug Analysis ===\n"))
+	debugInfo.WriteString(fmt.Sprintf("Alert: %s\n", alert.Labels["alertname"]))
+	debugInfo.WriteString(fmt.Sprintf("Severity: %s\n", alert.Labels["severity"]))
+	debugInfo.WriteString(fmt.Sprintf("Namespace: %s\n", namespace))
+	debugInfo.WriteString(fmt.Sprintf("Time: %s\n\n", alert.StartsAt.Format(time.RFC3339)))
+
+	if alert.Annotations["summary"] != "" {
+		debugInfo.WriteString(fmt.Sprintf("Summary: %s\n", alert.Annotations["summary"]))
+	}
+	if alert.Annotations["description"] != "" {
+		debugInfo.WriteString(fmt.Sprintf("Description: %s\n\n", alert.Annotations["description"]))
+	}
+
+	// 1. Get Pod logs if pod is specified
+	if podName != "" {
+		log.Printf("Fetching logs for pod: %s/%s", namespace, podName)
+		logs, err := getPodLogs(ctx, namespace, podName)
+		if err != nil {
+			result.PodLogs = fmt.Sprintf("Error fetching logs: %v", err)
+		} else {
+			result.PodLogs = logs
+		}
+		debugInfo.WriteString(fmt.Sprintf("=== Pod Logs (last 100 lines) ===\n%s\n\n", result.PodLogs))
+	}
+
+	// 2. Describe Pod
+	if podName != "" {
+		log.Printf("Describing pod: %s/%s", namespace, podName)
+		desc, err := describePod(ctx, namespace, podName)
+		if err != nil {
+			result.PodDescription = fmt.Sprintf("Error describing pod: %v", err)
+		} else {
+			result.PodDescription = desc
+		}
+		debugInfo.WriteString(fmt.Sprintf("=== Pod Details ===\n%s\n\n", result.PodDescription))
+	}
+
+	// 3. Get recent events in namespace
+	log.Printf("Fetching events in namespace: %s", namespace)
+	events, err := getNamespaceEvents(ctx, namespace)
+	if err != nil {
+		result.EventsList = fmt.Sprintf("Error fetching events: %v", err)
+	} else {
+		result.EventsList = events
+	}
+	debugInfo.WriteString(fmt.Sprintf("=== Recent Events ===\n%s\n\n", result.EventsList))
+
+	// 4. Check Service if specified
+	if serviceName != "" {
+		log.Printf("Checking service: %s/%s", namespace, serviceName)
+		svcCheck, err := checkService(ctx, namespace, serviceName)
+		if err != nil {
+			result.ServiceCheck = fmt.Sprintf("Error checking service: %v", err)
+		} else {
+			result.ServiceCheck = svcCheck
+		}
+		debugInfo.WriteString(fmt.Sprintf("=== Service Check ===\n%s\n\n", result.ServiceCheck))
+	}
+
+	// 5. Check Pod network connectivity
+	if podName != "" {
+		log.Printf("Checking network for pod: %s/%s", namespace, podName)
+		netCheck, err := checkPodNetwork(ctx, namespace, podName)
+		if err != nil {
+			result.NetworkCheck = fmt.Sprintf("Error checking network: %v", err)
+		} else {
+			result.NetworkCheck = netCheck
+		}
+		debugInfo.WriteString(fmt.Sprintf("=== Network Check ===\n%s\n\n", result.NetworkCheck))
+	}
+
+	// 6. Get resource metrics
+	if podName != "" {
+		log.Printf("Checking resources for pod: %s/%s", namespace, podName)
+		metrics, err := checkPodResources(ctx, namespace, podName)
+		if err != nil {
+			result.ResourceMetrics = fmt.Sprintf("Error checking resources: %v", err)
+		} else {
+			result.ResourceMetrics = metrics
+		}
+		debugInfo.WriteString(fmt.Sprintf("=== Resource Metrics ===\n%s\n\n", result.ResourceMetrics))
+	}
+
+	// Send to Ollama for analysis
+	log.Printf("Sending debug info to Ollama for analysis")
+	analysis, err := analyzeWithOllama(debugInfo.String())
+	if err != nil {
+		log.Printf("Error analyzing with Ollama: %v", err)
+		result.Analysis = fmt.Sprintf("Error: %v", err)
+	} else {
+		result.Analysis = analysis
+	}
+
+	// Log the complete analysis
+	log.Printf("\n=== COMPLETE ANALYSIS FOR %s ===\n%s\n=== AI ANALYSIS ===\n%s\n=== END ===\n",
+		alert.Labels["alertname"], debugInfo.String(), result.Analysis)
+
+	// Send analysis to Slack thread if we have a thread ID
+	if slackWebhookURL != "" && slackThreadTS != "" {
+		if err := sendAnalysisToSlack(alert, result.Analysis, slackThreadTS); err != nil {
+			log.Printf("Failed to send analysis to Slack thread: %v", err)
+		} else {
+			log.Printf("Analysis posted to Slack thread: %s", slackThreadTS)
+		}
+	} else if slackWebhookURL != "" {
+		// If no thread ID, send as separate message
+		if err := sendAnalysisToSlack(alert, result.Analysis, ""); err != nil {
+			log.Printf("Failed to send analysis to Slack: %v", err)
+		} else {
+			log.Printf("Analysis sent to Slack")
+		}
+	}
+}
+
+func getPodLogs(ctx context.Context, namespace, podName string) (string, error) {
+	// Reference: https://pkg.go.dev/k8s.io/client-go/kubernetes/typed/core/v1#PodInterface
+	tailLines := int64(100)
+	req := clientset.CoreV1().Pods(namespace).GetLogs(podName, &corev1.PodLogOptions{
+		TailLines: &tailLines,
+	})
+
+	logs, err := req.Stream(ctx)
+	if err != nil {
+		return "", fmt.Errorf("failed to get logs: %w", err)
+	}
+	defer logs.Close()
+
+	buf := new(bytes.Buffer)
+	_, err = io.Copy(buf, logs)
+	if err != nil {
+		return "", fmt.Errorf("failed to read logs: %w", err)
+	}
+
+	return buf.String(), nil
+}
+
+func describePod(ctx context.Context, namespace, podName string) (string, error) {
+	// Reference: https://pkg.go.dev/k8s.io/client-go/kubernetes/typed/core/v1#PodInterface
+	pod, err := clientset.CoreV1().Pods(namespace).Get(ctx, podName, metav1.GetOptions{})
+	if err != nil {
+		return "", fmt.Errorf("failed to get pod: %w", err)
+	}
+
+	var desc strings.Builder
+	desc.WriteString(fmt.Sprintf("Name: %s\n", pod.Name))
+	desc.WriteString(fmt.Sprintf("Namespace: %s\n", pod.Namespace))
+	desc.WriteString(fmt.Sprintf("Phase: %s\n", pod.Status.Phase))
+	desc.WriteString(fmt.Sprintf("Node: %s\n", pod.Spec.NodeName))
+	desc.WriteString(fmt.Sprintf("IP: %s\n", pod.Status.PodIP))
+	desc.WriteString(fmt.Sprintf("Start Time: %s\n", pod.Status.StartTime))
+
+	desc.WriteString("\nContainer Statuses:\n")
+	for _, cs := range pod.Status.ContainerStatuses {
+		desc.WriteString(fmt.Sprintf("  - %s: Ready=%v, RestartCount=%d\n", cs.Name, cs.Ready, cs.RestartCount))
+		if cs.State.Waiting != nil {
+			desc.WriteString(fmt.Sprintf("    Waiting: %s - %s\n", cs.State.Waiting.Reason, cs.State.Waiting.Message))
+		}
+		if cs.State.Terminated != nil {
+			desc.WriteString(fmt.Sprintf("    Terminated: %s - %s (Exit Code: %d)\n",
+				cs.State.Terminated.Reason, cs.State.Terminated.Message, cs.State.Terminated.ExitCode))
+		}
+	}
+
+	desc.WriteString("\nConditions:\n")
+	for _, cond := range pod.Status.Conditions {
+		desc.WriteString(fmt.Sprintf("  - %s: %s (%s)\n", cond.Type, cond.Status, cond.Reason))
+		if cond.Message != "" {
+			desc.WriteString(fmt.Sprintf("    Message: %s\n", cond.Message))
+		}
+	}
+
+	return desc.String(), nil
+}
+
+func getNamespaceEvents(ctx context.Context, namespace string) (string, error) {
+	// Reference: https://pkg.go.dev/k8s.io/client-go/kubernetes/typed/core/v1#EventInterface
+	events, err := clientset.CoreV1().Events(namespace).List(ctx, metav1.ListOptions{
+		Limit: 50,
+	})
+	if err != nil {
+		return "", fmt.Errorf("failed to get events: %w", err)
+	}
+
+	if len(events.Items) == 0 {
+		return "No recent events found", nil
+	}
+
+	var eventDesc strings.Builder
+	for _, event := range events.Items {
+		eventDesc.WriteString(fmt.Sprintf("[%s] %s %s/%s: %s - %s\n",
+			event.LastTimestamp.Format("15:04:05"),
+			event.Type,
+			event.InvolvedObject.Kind,
+			event.InvolvedObject.Name,
+			event.Reason,
+			event.Message))
+	}
+
+	return eventDesc.String(), nil
+}
+
+func checkService(ctx context.Context, namespace, serviceName string) (string, error) {
+	// Reference: https://pkg.go.dev/k8s.io/client-go/kubernetes/typed/core/v1#ServiceInterface
+	svc, err := clientset.CoreV1().Services(namespace).Get(ctx, serviceName, metav1.GetOptions{})
+	if err != nil {
+		return "", fmt.Errorf("failed to get service: %w", err)
+	}
+
+	var svcDesc strings.Builder
+	svcDesc.WriteString(fmt.Sprintf("Service: %s\n", svc.Name))
+	svcDesc.WriteString(fmt.Sprintf("Type: %s\n", svc.Spec.Type))
+	svcDesc.WriteString(fmt.Sprintf("ClusterIP: %s\n", svc.Spec.ClusterIP))
+
+	svcDesc.WriteString("Ports:\n")
+	for _, port := range svc.Spec.Ports {
+		svcDesc.WriteString(fmt.Sprintf("  - %s: %d/%s -> %d\n", port.Name, port.Port, port.Protocol, port.TargetPort.IntVal))
+	}
+
+	svcDesc.WriteString("Selector:\n")
+	for k, v := range svc.Spec.Selector {
+		svcDesc.WriteString(fmt.Sprintf("  %s: %s\n", k, v))
+	}
+
+	// Get endpoints
+	endpoints, err := clientset.CoreV1().Endpoints(namespace).Get(ctx, serviceName, metav1.GetOptions{})
+	if err != nil {
+		svcDesc.WriteString(fmt.Sprintf("Failed to get endpoints: %v\n", err))
+	} else {
+		svcDesc.WriteString("\nEndpoints:\n")
+		if len(endpoints.Subsets) == 0 {
+			svcDesc.WriteString("  WARNING: No endpoints available!\n")
+		} else {
+			for _, subset := range endpoints.Subsets {
+				for _, addr := range subset.Addresses {
+					svcDesc.WriteString(fmt.Sprintf("  - %s", addr.IP))
+					if addr.TargetRef != nil {
+						svcDesc.WriteString(fmt.Sprintf(" (Pod: %s)", addr.TargetRef.Name))
+					}
+					svcDesc.WriteString("\n")
+				}
+			}
+		}
+	}
+
+	return svcDesc.String(), nil
+}
+
+func checkPodNetwork(ctx context.Context, namespace, podName string) (string, error) {
+	pod, err := clientset.CoreV1().Pods(namespace).Get(ctx, podName, metav1.GetOptions{})
+	if err != nil {
+		return "", fmt.Errorf("failed to get pod: %w", err)
+	}
+
+	var netDesc strings.Builder
+	netDesc.WriteString(fmt.Sprintf("Pod IP: %s\n", pod.Status.PodIP))
+	netDesc.WriteString(fmt.Sprintf("Host IP: %s\n", pod.Status.HostIP))
+
+	// Check network policies in namespace
+	netPolicies, err := clientset.NetworkingV1().NetworkPolicies(namespace).List(ctx, metav1.ListOptions{})
+	if err != nil {
+		netDesc.WriteString(fmt.Sprintf("Failed to get network policies: %v\n", err))
+	} else {
+		netDesc.WriteString(fmt.Sprintf("\nNetwork Policies: %d\n", len(netPolicies.Items)))
+		for _, np := range netPolicies.Items {
+			netDesc.WriteString(fmt.Sprintf("  - %s\n", np.Name))
+		}
+	}
+
+	return netDesc.String(), nil
+}
+
+func checkPodResources(ctx context.Context, namespace, podName string) (string, error) {
+	pod, err := clientset.CoreV1().Pods(namespace).Get(ctx, podName, metav1.GetOptions{})
+	if err != nil {
+		return "", fmt.Errorf("failed to get pod: %w", err)
+	}
+
+	var resDesc strings.Builder
+	resDesc.WriteString("Container Resources:\n")
+	for _, container := range pod.Spec.Containers {
+		resDesc.WriteString(fmt.Sprintf("\nContainer: %s\n", container.Name))
+
+		if len(container.Resources.Requests) > 0 {
+			resDesc.WriteString("  Requests:\n")
+			for k, v := range container.Resources.Requests {
+				resDesc.WriteString(fmt.Sprintf("    %s: %s\n", k, v.String()))
+			}
+		}
+
+		if len(container.Resources.Limits) > 0 {
+			resDesc.WriteString("  Limits:\n")
+			for k, v := range container.Resources.Limits {
+				resDesc.WriteString(fmt.Sprintf("    %s: %s\n", k, v.String()))
+			}
+		}
+
+		// Check liveness and readiness probes
+		if container.LivenessProbe != nil {
+			resDesc.WriteString("  Liveness Probe: Configured\n")
+		}
+		if container.ReadinessProbe != nil {
+			resDesc.WriteString("  Readiness Probe: Configured\n")
+		}
+	}
+
+	return resDesc.String(), nil
+}
+
+func analyzeWithOllama(debugInfo string) (string, error) {
+	// Reference: https://github.com/ollama/ollama/blob/main/docs/api.md
+	prompt := fmt.Sprintf(`You are a Kubernetes SRE expert analyzing an incident. Based on the following debug information, provide:
+
+1. Root Cause Analysis: What is the most likely root cause of this issue?
+2. Evidence: What specific evidence supports this conclusion?
+3. Impact Assessment: What is the impact of this issue?
+4. Recommended Actions: What immediate actions should the team take?
+5. Prevention: What can be done to prevent this in the future?
+
+Debug Information:
+%s
+
+Provide a clear, structured analysis:`, debugInfo)
+
+	reqBody := OllamaRequest{
+		Model:  ollamaModel,
+		Prompt: prompt,
+		Stream: false,
+	}
+
+	jsonData, err := json.Marshal(reqBody)
+	if err != nil {
+		return "", fmt.Errorf("failed to marshal request: %w", err)
+	}
+
+	resp, err := http.Post(ollamaURL+"/api/generate", "application/json", bytes.NewBuffer(jsonData))
+	if err != nil {
+		return "", fmt.Errorf("failed to call Ollama API: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return "", fmt.Errorf("Ollama API returned status %d: %s", resp.StatusCode, string(body))
+	}
+
+	var ollamaResp OllamaResponse
+	if err := json.NewDecoder(resp.Body).Decode(&ollamaResp); err != nil {
+		return "", fmt.Errorf("failed to decode Ollama response: %w", err)
+	}
+
+	return ollamaResp.Response, nil
+}
+
+func getKubernetesClient() (*kubernetes.Clientset, error) {
+	// Reference: https://pkg.go.dev/k8s.io/client-go/rest#InClusterConfig
+	// Try in-cluster config first
+	config, err := rest.InClusterConfig()
+	if err != nil {
+		// Fall back to kubeconfig
+		kubeconfig := os.Getenv("KUBECONFIG")
+		if kubeconfig == "" {
+			kubeconfig = os.Getenv("HOME") + "/.kube/config"
+		}
+		config, err = clientcmd.BuildConfigFromFlags("", kubeconfig)
+		if err != nil {
+			return nil, fmt.Errorf("failed to build config: %w", err)
+		}
+	}
+
+	clientset, err := kubernetes.NewForConfig(config)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create clientset: %w", err)
+	}
+
+	return clientset, nil
+}
+
+func healthHandler(w http.ResponseWriter, r *http.Request) {
+	w.WriteHeader(http.StatusOK)
+	w.Write([]byte(`{"status":"healthy"}`))
+}
+
+func getEnv(key, defaultValue string) string {
+	if value := os.Getenv(key); value != "" {
+		return value
+	}
+	return defaultValue
+}
+
+func sendAlertToSlack(alert Alert) (string, error) {
+	// Prefer Bot token for threading support, fall back to webhook
+	if slackBotToken != "" && slackChannelID != "" {
+		return sendAlertToSlackWithBot(alert)
+	} else if slackWebhookURL != "" {
+		return sendAlertToSlackWithWebhook(alert)
+	}
+	return "", nil
+}
+
+func sendAlertToSlackWithBot(alert Alert) (string, error) {
+	// Reference: https://api.slack.com/methods/chat.postMessage
+	severity := alert.Labels["severity"]
+
+	// Create Slack message with blocks
+	message := SlackMessage{
+		Channel:     slackChannelID,
+		UnfurlLinks: false,
+		Blocks: []SlackBlock{
+			{
+				Type: "header",
+				Text: &SlackTextObject{
+					Type: "plain_text",
+					Text: fmt.Sprintf("🚨 %s", alert.Labels["alertname"]),
+				},
+			},
+			{
+				Type: "section",
+				Fields: []SlackTextObject{
+					{
+						Type: "mrkdwn",
+						Text: fmt.Sprintf("*Severity:*\n%s", severity),
+					},
+					{
+						Type: "mrkdwn",
+						Text: fmt.Sprintf("*Namespace:*\n%s", alert.Labels["namespace"]),
+					},
+				},
+			},
+		},
+	}
+
+	// Add pod info if available
+	if pod := alert.Labels["pod"]; pod != "" {
+		message.Blocks = append(message.Blocks, SlackBlock{
+			Type: "section",
+			Fields: []SlackTextObject{
+				{
+					Type: "mrkdwn",
+					Text: fmt.Sprintf("*Pod:*\n`%s`", pod),
+				},
+				{
+					Type: "mrkdwn",
+					Text: fmt.Sprintf("*Service:*\n%s", alert.Labels["service"]),
+				},
+			},
+		})
+	}
+
+	// Add annotations
+	if summary := alert.Annotations["summary"]; summary != "" {
+		message.Blocks = append(message.Blocks, SlackBlock{
+			Type: "section",
+			Text: &SlackTextObject{
+				Type: "mrkdwn",
+				Text: fmt.Sprintf("*Summary:*\n%s", summary),
+			},
+		})
+	}
+
+	if description := alert.Annotations["description"]; description != "" {
+		message.Blocks = append(message.Blocks, SlackBlock{
+			Type: "section",
+			Text: &SlackTextObject{
+				Type: "mrkdwn",
+				Text: fmt.Sprintf("*Description:*\n%s", description),
+			},
+		})
+	}
+
+	// Add timestamp
+	message.Blocks = append(message.Blocks, SlackBlock{
+		Type: "context",
+		Elements: []SlackTextObject{
+			{
+				Type: "mrkdwn",
+				Text: fmt.Sprintf("Started: %s", alert.StartsAt.Format("2006-01-02 15:04:05 MST")),
+			},
+		},
+	})
+
+	// Add divider
+	message.Blocks = append(message.Blocks, SlackBlock{
+		Type: "divider",
+	})
+
+	// Add status message
+	message.Blocks = append(message.Blocks, SlackBlock{
+		Type: "section",
+		Text: &SlackTextObject{
+			Type: "mrkdwn",
+			Text: "🤖 _AI debugging in progress..._",
+		},
+	})
+
+	jsonData, err := json.Marshal(message)
+	if err != nil {
+		return "", fmt.Errorf("failed to marshal Slack message: %w", err)
+	}
+
+	// Use chat.postMessage API
+	req, err := http.NewRequest("POST", "https://slack.com/api/chat.postMessage", bytes.NewBuffer(jsonData))
+	if err != nil {
+		return "", fmt.Errorf("failed to create request: %w", err)
+	}
+
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", slackBotToken))
+
+	client := &http.Client{}
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("failed to send to Slack: %w", err)
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", fmt.Errorf("failed to read response: %w", err)
+	}
+
+	var slackResp SlackResponse
+	if err := json.Unmarshal(body, &slackResp); err != nil {
+		return "", fmt.Errorf("failed to parse Slack response: %w", err)
+	}
+
+	if !slackResp.OK {
+		return "", fmt.Errorf("Slack error: %s", slackResp.Error)
+	}
+
+	log.Printf("Alert sent to Slack, thread_ts: %s", slackResp.TS)
+	return slackResp.TS, nil
+}
+
+func sendAlertToSlackWithWebhook(alert Alert) (string, error) {
+
+	// Build alert severity for display
+	severity := alert.Labels["severity"]
+
+	// Create Slack message with blocks for better formatting
+	// Reference: https://api.slack.com/messaging/webhooks
+	message := SlackMessage{
+		UnfurlLinks: false,
+		Blocks: []SlackBlock{
+			{
+				Type: "header",
+				Text: &SlackTextObject{
+					Type: "plain_text",
+					Text: fmt.Sprintf("🚨 %s", alert.Labels["alertname"]),
+				},
+			},
+			{
+				Type: "section",
+				Fields: []SlackTextObject{
+					{
+						Type: "mrkdwn",
+						Text: fmt.Sprintf("*Severity:*\n%s", severity),
+					},
+					{
+						Type: "mrkdwn",
+						Text: fmt.Sprintf("*Namespace:*\n%s", alert.Labels["namespace"]),
+					},
+				},
+			},
+		},
+	}
+
+	// Add pod info if available
+	if pod := alert.Labels["pod"]; pod != "" {
+		message.Blocks = append(message.Blocks, SlackBlock{
+			Type: "section",
+			Fields: []SlackTextObject{
+				{
+					Type: "mrkdwn",
+					Text: fmt.Sprintf("*Pod:*\n`%s`", pod),
+				},
+				{
+					Type: "mrkdwn",
+					Text: fmt.Sprintf("*Service:*\n%s", alert.Labels["service"]),
+				},
+			},
+		})
+	}
+
+	// Add annotations
+	if summary := alert.Annotations["summary"]; summary != "" {
+		message.Blocks = append(message.Blocks, SlackBlock{
+			Type: "section",
+			Text: &SlackTextObject{
+				Type: "mrkdwn",
+				Text: fmt.Sprintf("*Summary:*\n%s", summary),
+			},
+		})
+	}
+
+	if description := alert.Annotations["description"]; description != "" {
+		message.Blocks = append(message.Blocks, SlackBlock{
+			Type: "section",
+			Text: &SlackTextObject{
+				Type: "mrkdwn",
+				Text: fmt.Sprintf("*Description:*\n%s", description),
+			},
+		})
+	}
+
+	// Add timestamp
+	message.Blocks = append(message.Blocks, SlackBlock{
+		Type: "context",
+		Elements: []SlackTextObject{
+			{
+				Type: "mrkdwn",
+				Text: fmt.Sprintf("Started: %s", alert.StartsAt.Format("2006-01-02 15:04:05 MST")),
+			},
+		},
+	})
+
+	// Add divider
+	message.Blocks = append(message.Blocks, SlackBlock{
+		Type: "divider",
+	})
+
+	// Add status message
+	message.Blocks = append(message.Blocks, SlackBlock{
+		Type: "section",
+		Text: &SlackTextObject{
+			Type: "mrkdwn",
+			Text: "🤖 _AI debugging in progress..._",
+		},
+	})
+
+	jsonData, err := json.Marshal(message)
+	if err != nil {
+		return "", fmt.Errorf("failed to marshal Slack message: %w", err)
+	}
+
+	resp, err := http.Post(slackWebhookURL, "application/json", bytes.NewBuffer(jsonData))
+	if err != nil {
+		return "", fmt.Errorf("failed to send to Slack: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return "", fmt.Errorf("Slack API returned status %d: %s", resp.StatusCode, string(body))
+	}
+
+	// Parse response to get thread timestamp
+	var slackResp SlackResponse
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		log.Printf("Warning: Could not read Slack response: %v", err)
+		return "", nil
+	}
+
+	// Slack webhook responses don't always include the ts, but we'll try to parse it
+	// For incoming webhooks, we need to use the response differently
+	// The response is typically just "ok" for incoming webhooks
+	if strings.TrimSpace(string(body)) == "ok" {
+		// For incoming webhooks, we can't get the thread_ts directly
+		// We'll need to use a Bot token for that, but for now, just log success
+		log.Printf("Alert sent to Slack successfully")
+		return "", nil
+	}
+
+	if err := json.Unmarshal(body, &slackResp); err != nil {
+		log.Printf("Warning: Could not parse Slack response: %v", err)
+		return "", nil
+	}
+
+	if !slackResp.OK {
+		return "", fmt.Errorf("Slack error: %s", slackResp.Error)
+	}
+
+	return slackResp.TS, nil
+}
+
+func sendAnalysisToSlack(alert Alert, analysis string, threadTS string) error {
+	// Prefer Bot token for threading, fall back to webhook
+	if slackBotToken != "" && slackChannelID != "" && threadTS != "" {
+		return sendAnalysisToSlackWithBot(alert, analysis, threadTS)
+	} else if slackWebhookURL != "" {
+		return sendAnalysisToSlackWithWebhook(alert, analysis, threadTS)
+	}
+	return nil
+}
+
+func sendAnalysisToSlackWithBot(alert Alert, analysis string, threadTS string) error {
+	// Reference: https://api.slack.com/methods/chat.postMessage
+	message := SlackMessage{
+		Channel:     slackChannelID,
+		ThreadTS:    threadTS, // This makes it a threaded reply
+		UnfurlLinks: false,
+		Blocks: []SlackBlock{
+			{
+				Type: "section",
+				Text: &SlackTextObject{
+					Type: "mrkdwn",
+					Text: "*🔍 AI Debug Analysis Complete*",
+				},
+			},
+			{
+				Type: "divider",
+			},
+			{
+				Type: "section",
+				Text: &SlackTextObject{
+					Type: "mrkdwn",
+					Text: fmt.Sprintf("```\n%s\n```", truncateForSlack(analysis, 2900)),
+				},
+			},
+		},
+	}
+
+	jsonData, err := json.Marshal(message)
+	if err != nil {
+		return fmt.Errorf("failed to marshal Slack message: %w", err)
+	}
+
+	req, err := http.NewRequest("POST", "https://slack.com/api/chat.postMessage", bytes.NewBuffer(jsonData))
+	if err != nil {
+		return fmt.Errorf("failed to create request: %w", err)
+	}
+
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", slackBotToken))
+
+	client := &http.Client{}
+	resp, err := client.Do(req)
+	if err != nil {
+		return fmt.Errorf("failed to send to Slack: %w", err)
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return fmt.Errorf("failed to read response: %w", err)
+	}
+
+	var slackResp SlackResponse
+	if err := json.Unmarshal(body, &slackResp); err != nil {
+		return fmt.Errorf("failed to parse Slack response: %w", err)
+	}
+
+	if !slackResp.OK {
+		return fmt.Errorf("Slack error: %s", slackResp.Error)
+	}
+
+	log.Printf("Analysis sent to Slack thread: %s", threadTS)
+	return nil
+}
+
+func sendAnalysisToSlackWithWebhook(alert Alert, analysis string, threadTS string) error {
+
+	// Create a formatted analysis message
+	message := SlackMessage{
+		UnfurlLinks: false,
+		Blocks: []SlackBlock{
+			{
+				Type: "section",
+				Text: &SlackTextObject{
+					Type: "mrkdwn",
+					Text: fmt.Sprintf("*🔍 AI Debug Analysis Complete*\nAlert: `%s`", alert.Labels["alertname"]),
+				},
+			},
+			{
+				Type: "divider",
+			},
+			{
+				Type: "section",
+				Text: &SlackTextObject{
+					Type: "mrkdwn",
+					Text: fmt.Sprintf("```\n%s\n```", truncateForSlack(analysis, 2900)),
+				},
+			},
+		},
+	}
+
+	// If we have a thread timestamp, add it
+	if threadTS != "" {
+		message.ThreadTS = threadTS
+	}
+
+	jsonData, err := json.Marshal(message)
+	if err != nil {
+		return fmt.Errorf("failed to marshal Slack message: %w", err)
+	}
+
+	resp, err := http.Post(slackWebhookURL, "application/json", bytes.NewBuffer(jsonData))
+	if err != nil {
+		return fmt.Errorf("failed to send to Slack: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("Slack API returned status %d: %s", resp.StatusCode, string(body))
+	}
+
+	log.Printf("Analysis sent to Slack for alert: %s", alert.Labels["alertname"])
+	return nil
+}
+
+func truncateForSlack(text string, maxLen int) string {
+	if len(text) <= maxLen {
+		return text
+	}
+	return text[:maxLen] + "\n... (truncated)"
+}

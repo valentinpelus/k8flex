@@ -1,0 +1,9 @@
+# Deploy chart
+
+releases:
+  - name: k8flex
+    namespace: k8flex
+    chart: ./k8flex/helm/k8flex
+    version: 0.1.0
+    values:
+      - values.yaml

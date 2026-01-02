@@ -1,0 +1,8 @@
+repositories: []
+
+releases:
+  - name: k8flex
+    namespace: k8flex
+    chart: ./helm/k8flex
+    values:
+      - ./helm/k8flex/values.yaml

@@ -1,0 +1,32 @@
+# Development values for k8flex
+replicaCount: 1
+
+image:
+  repository: k8flex-agent
+  pullPolicy: Always
+  tag: "latest"
+
+resources:
+  limits:
+    cpu: 200m
+    memory: 256Mi
+  requests:
+    cpu: 50m
+    memory: 64Mi
+
+config:
+  ollama:
+    url: "http://ollama.ollama.svc.cluster.local:11434"
+    model: "mistral"  # Smaller model for faster responses in dev
+
+slack:
+  # Configure with your dev Slack channel
+  botToken: ""
+  channelId: ""
+  # OR use webhook:
+  # webhookUrl: ""
+
+# Allow pod to be scheduled on any node
+nodeSelector: {}
+tolerations: []
+affinity: {}

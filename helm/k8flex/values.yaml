@@ -1,0 +1,105 @@
+# Default values for k8flex.
+# This is a YAML-formatted file.
+# Declare variables to be passed into your templates.
+
+replicaCount: 1
+
+image:
+  repository: k8flex-agent
+  pullPolicy: IfNotPresent
+  # Overrides the image tag whose default is the chart appVersion.
+  tag: "latest"
+
+imagePullSecrets: []
+nameOverride: ""
+fullnameOverride: ""
+
+serviceAccount:
+  # Specifies whether a service account should be created
+  create: true
+  # Annotations to add to the service account
+  annotations: {}
+  # The name of the service account to use.
+  # If not set and create is true, a name is generated using the fullname template
+  name: "k8flex-agent"
+
+podAnnotations: {}
+
+podSecurityContext: {}
+  # fsGroup: 2000
+
+securityContext: {}
+  # capabilities:
+  #   drop:
+  #   - ALL
+  # readOnlyRootFilesystem: true
+  # runAsNonRoot: true
+  # runAsUser: 1000
+
+service:
+  type: ClusterIP
+  port: 8080
+  targetPort: 8080
+  name: http
+
+resources:
+  limits:
+    cpu: 500m
+    memory: 512Mi
+  requests:
+    cpu: 100m
+    memory: 128Mi
+
+livenessProbe:
+  httpGet:
+    path: /health
+    port: http
+  initialDelaySeconds: 10
+  periodSeconds: 30
+
+readinessProbe:
+  httpGet:
+    path: /health
+    port: http
+  initialDelaySeconds: 5
+  periodSeconds: 10
+
+# RBAC settings
+rbac:
+  # Specifies whether RBAC resources should be created
+  create: true
+
+# Configuration
+config:
+  # Ollama settings
+  ollama:
+    url: "http://ollama.ollama.svc.cluster.local:11434"
+    model: "llama3"
+  
+  # Application port
+  port: "8080"
+
+# Slack integration
+slack:
+  # Use Bot token for threading support (recommended)
+  botToken: ""  # Replace with your actual bot token
+  channelId: ""   
+  
+  # OR use webhook URL (no threading support)
+  webhookUrl: ""
+
+# Webhook security
+webhook:
+  # Authentication token for webhook endpoint
+  # Leave empty to auto-generate a secure random token (recommended)
+  # Or provide your own: openssl rand -hex 32
+  authToken: ""
+
+# Node selector for pod assignment
+nodeSelector: {}
+
+# Tolerations for pod assignment
+tolerations: []
+
+# Affinity for pod assignment
+affinity: {}
