@@ -125,6 +125,27 @@ config:
   # Application port
   port: "8080"
 
+# Alerting System Adapters
+# Configure which alerting systems k8flex should accept webhooks from
+adapters:
+  # Enable all adapters by default (leave empty)
+  # Or specify comma-separated list: alertmanager,pagerduty,grafana,datadog,opsgenie,victorops,newrelic
+  # Examples:
+  #   enabled: "alertmanager"                              # Only Alertmanager
+  #   enabled: "alertmanager,grafana"                      # Alertmanager + Grafana  
+  #   enabled: "alertmanager,pagerduty,grafana,datadog"   # Multiple systems
+  #   enabled: ""                                          # All adapters (default)
+  enabled: ""
+  
+  # Available adapters:
+  # - alertmanager: Prometheus Alertmanager
+  # - pagerduty: PagerDuty incidents
+  # - grafana: Grafana Alerting
+  # - datadog: Datadog Monitors
+  # - opsgenie: Opsgenie alerts
+  # - victorops: VictorOps (Splunk On-Call)
+  # - newrelic: New Relic Alerts
+
 # Knowledge Base (Vector Database for similar case retrieval)
 knowledgeBase:
   # Enable knowledge base for storing and retrieving validated alert cases

@@ -1,13 +1,19 @@
 apiVersion: v2
 name: k8flex
-description: AI-powered Kubernetes debugging agent that integrates with Alertmanager and Slack
+description: AI-powered Kubernetes debugging agent with multi-provider alerting support (Alertmanager, PagerDuty, Grafana, Datadog, Opsgenie, VictorOps, New Relic)
 type: application
-version: 1.0.0
-appVersion: "1.0.0"
+version: 2.0.0
+appVersion: "2.0.0"
 keywords:
   - kubernetes
   - debugging
   - alertmanager
+  - pagerduty
+  - grafana
+  - datadog
+  - opsgenie
+  - victorops
+  - newrelic
   - ai
   - ollama
   - slack

@@ -1,0 +1,42 @@
+{
+  "messages": [
+    {
+      "id": "12345678-1234-1234-1234-123456789012",
+      "event": "incident.trigger",
+      "incident": {
+        "id": "INCIDENT123",
+        "incident_number": 42,
+        "title": "Pod CrashLooping in production",
+        "status": "triggered",
+        "created_at": "2024-01-15T10:30:00Z",
+        "urgency": "high",
+        "priority": {
+          "summary": "P1"
+        },
+        "service": {
+          "id": "SERVICE123",
+          "name": "Production API",
+          "summary": "Production API Service"
+        },
+        "assignments": [
+          {
+            "assignee": {
+              "summary": "On-Call Engineer"
+            }
+          }
+        ],
+        "body": {
+          "details": "Pod api-server-xyz is crash looping with OOMKilled status"
+        },
+        "custom_details": {
+          "namespace": "production",
+          "pod": "api-server-xyz",
+          "service": "api-server",
+          "cluster": "prod-cluster-01",
+          "container": "main",
+          "restarts": "15"
+        }
+      }
+    }
+  ]
+}

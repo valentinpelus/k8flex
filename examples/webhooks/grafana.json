@@ -1,0 +1,46 @@
+{
+  "receiver": "k8flex-webhook",
+  "status": "firing",
+  "alerts": [
+    {
+      "status": "firing",
+      "labels": {
+        "alertname": "PodNotReady",
+        "grafana_folder": "Kubernetes Alerts",
+        "namespace": "staging",
+        "pod": "backend-service-abc123",
+        "service": "backend-service",
+        "severity": "critical"
+      },
+      "annotations": {
+        "description": "Pod backend-service-abc123 in namespace staging has been not ready for more than 5 minutes",
+        "summary": "Pod not ready",
+        "runbook_url": "https://runbooks.example.com/pod-not-ready"
+      },
+      "startsAt": "2024-01-15T10:25:00Z",
+      "endsAt": "0001-01-01T00:00:00Z",
+      "generatorURL": "https://grafana.example.com/alerting/grafana/abc123/view",
+      "fingerprint": "abc123def456",
+      "silenceURL": "https://grafana.example.com/alerting/silence/new?alertmanager=grafana&matcher=alertname%3DPodNotReady",
+      "dashboardURL": "",
+      "panelURL": "",
+      "valueString": "[ var='A' labels={} value=1 ]"
+    }
+  ],
+  "groupLabels": {
+    "alertname": "PodNotReady"
+  },
+  "commonLabels": {
+    "alertname": "PodNotReady",
+    "namespace": "staging",
+    "severity": "critical"
+  },
+  "commonAnnotations": {},
+  "externalURL": "https://grafana.example.com/",
+  "version": "1",
+  "groupKey": "{}:{alertname=\"PodNotReady\"}",
+  "truncatedAlerts": 0,
+  "title": "[FIRING:1] PodNotReady",
+  "state": "alerting",
+  "message": "**Firing**\n\nValue: [ var='A' labels={} value=1 ]\nLabels:\n - alertname = PodNotReady\n - grafana_folder = Kubernetes Alerts\n - namespace = staging\n - pod = backend-service-abc123\n - service = backend-service\n - severity = critical\nAnnotations:\n - description = Pod backend-service-abc123 in namespace staging has been not ready for more than 5 minutes\n - summary = Pod not ready\nSource: https://grafana.example.com/alerting/grafana/abc123/view\nSilence: https://grafana.example.com/alerting/silence/new?alertmanager=grafana&matcher=alertname%3DPodNotReady\n"
+}

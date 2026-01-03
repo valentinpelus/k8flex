@@ -45,4 +45,9 @@ data:
   KB_ENABLED: "false"
   {{- end }}
   
+  # Alerting System Adapters
+  {{- if .Values.adapters.enabled }}
+  ENABLED_ADAPTERS: {{ .Values.adapters.enabled | quote }}
+  {{- end }}
+  
   PORT: {{ .Values.config.port | quote }}
