@@ -10,7 +10,8 @@ import (
 
 	"github.com/valentinpelus/k8flex/internal/debugger"
 	"github.com/valentinpelus/k8flex/pkg/feedback"
-	"github.com/valentinpelus/k8flex/pkg/ollama"
+	"github.com/valentinpelus/k8flex/pkg/knowledge"
+	"github.com/valentinpelus/k8flex/pkg/llm"
 	"github.com/valentinpelus/k8flex/pkg/slack"
 	"github.com/valentinpelus/k8flex/pkg/types"
 )
@@ -28,20 +29,22 @@ type PendingFeedback struct {
 // AlertProcessor handles the processing of alerts
 type AlertProcessor struct {
 	debugger        *debugger.Debugger
-	ollamaClient    *ollama.Client
+	llmProvider     llm.Provider
 	slackClient     *slack.Client
 	feedbackManager *feedback.Manager
+	knowledgeBase   *knowledge.KnowledgeBase
 	pendingFeedback map[string]*PendingFeedback // Key: analysis message TS
 	pendingMutex    sync.RWMutex
 }
 
 // NewAlertProcessor creates a new alert processor
-func NewAlertProcessor(dbg *debugger.Debugger, ollamaClient *ollama.Client, slackClient *slack.Client, feedbackMgr *feedback.Manager) *AlertProcessor {
+func NewAlertProcessor(dbg *debugger.Debugger, llmProvider llm.Provider, slackClient *slack.Client, feedbackMgr *feedback.Manager, kb *knowledge.KnowledgeBase) *AlertProcessor {
 	processor := &AlertProcessor{
 		debugger:        dbg,
-		ollamaClient:    ollamaClient,
+		llmProvider:     llmProvider,
 		slackClient:     slackClient,
 		feedbackManager: feedbackMgr,
+		knowledgeBase:   kb,
 		pendingFeedback: make(map[string]*PendingFeedback),
 	}
 
@@ -77,17 +80,34 @@ func (p *AlertProcessor) ProcessAlert(alert types.Alert) {
 		}
 	}
 
-	// Phase 1: Ask Ollama to categorize the alert
-	log.Printf("Asking Ollama to categorize alert: %s", alert.Labels["alertname"])
-	category, err := p.ollamaClient.CategorizeAlert(alert)
+	// Phase 1: Ask LLM provider to categorize the alert
+	log.Printf("Asking %s to categorize alert: %s", p.llmProvider.Name(), alert.Labels["alertname"])
+	category, err := p.llmProvider.CategorizeAlert(alert)
 	if err != nil {
 		log.Printf("Error categorizing alert: %v, using 'unknown'", err)
 		category = "unknown"
 	}
-	log.Printf("Ollama categorized alert as: %s", category)
+	log.Printf("%s categorized alert as: %s", p.llmProvider.Name(), category)
 
-	// Phase 2: Gather only relevant debug information based on category
+	// Phase 2: Search knowledge base for similar cases (if enabled)
 	ctx := context.Background()
+	var similarCases []*knowledge.SimilarCase
+	if p.knowledgeBase != nil {
+		searchText := fmt.Sprintf("%s %s %s",
+			alert.Labels["alertname"],
+			alert.Labels["severity"],
+			alert.Annotations["summary"])
+		var err error
+		similarCases, err = p.knowledgeBase.FindSimilar(ctx, searchText)
+		if err != nil {
+			log.Printf("Warning: failed to search knowledge base: %v", err)
+		} else if len(similarCases) > 0 {
+			log.Printf("Found %d similar cases in knowledge base (top similarity: %.2f%%)",
+				len(similarCases), similarCases[0].Similarity*100)
+		}
+	}
+
+	// Phase 3: Gather only relevant debug information based on category
 	debugInfo := p.debugger.GatherDebugInfo(ctx, alert, category)
 
 	// Get past feedback for similar alerts to improve analysis (limit to 1 to reduce prompt size)
@@ -108,14 +128,34 @@ func (p *AlertProcessor) ProcessAlert(alert types.Alert) {
 		}
 	}
 
-	// Phase 3: Stream analysis from Ollama with real-time Slack updates
-	log.Printf("Starting streaming analysis from Ollama")
+	// Add similar cases context to prompt if available
+	if len(similarCases) > 0 {
+		similarCasesText := "\n\n=== SIMILAR PAST CASES (from Knowledge Base) ===\n"
+		for i, sc := range similarCases {
+			if i >= 3 { // Limit to top 3 to avoid prompt bloat
+				break
+			}
+			similarCasesText += fmt.Sprintf("\n%d. [%.0f%% similar] %s - Category: %s\n",
+				i+1, sc.Similarity*100, sc.Case.AlertName, sc.Case.Category)
+			// Truncate analysis to first 150 chars
+			analysis := sc.Case.Analysis
+			if len(analysis) > 150 {
+				analysis = analysis[:150] + "..."
+			}
+			similarCasesText += fmt.Sprintf("   Previous Analysis: %s\n", analysis)
+		}
+		similarCasesText += "\nUse these similar cases to inform your analysis if patterns match.\n"
+		debugInfo = debugInfo + similarCasesText
+	}
+
+	// Phase 4: Stream analysis from LLM provider with real-time Slack updates
+	log.Printf("Starting streaming analysis from %s", p.llmProvider.Name())
 
 	var fullAnalysis strings.Builder
 	var analysisMessageTS string // Track the THREAD message timestamp for updates (not the parent)
 	updateCount := 0
 
-	err = p.ollamaClient.AnalyzeDebugInfoStream(debugInfo, pastFeedback, func(chunk string) {
+	err = p.llmProvider.AnalyzeDebugInfoStream(debugInfo, pastFeedback, func(chunk string) {
 		fullAnalysis.WriteString(chunk)
 		updateCount++
 
@@ -218,7 +258,28 @@ func (p *AlertProcessor) RecordManualFeedback(alert types.Alert, category, analy
 		Labels:      alert.Labels,
 	}
 
-	return p.feedbackManager.RecordFeedback(feedback)
+	// Store in feedback manager
+	if err := p.feedbackManager.RecordFeedback(feedback); err != nil {
+		return err
+	}
+
+	// If feedback is positive and knowledge base is enabled, store the case
+	if isCorrect && p.knowledgeBase != nil {
+		debugInfo := "" // We don't have debug info in manual feedback, but could add it
+		alertCase := knowledge.FromAlert(&alert, category, analysis, debugInfo)
+
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+
+		if err := p.knowledgeBase.Store(ctx, alertCase); err != nil {
+			log.Printf("Warning: failed to store case in knowledge base: %v", err)
+			// Don't fail the feedback recording if knowledge base storage fails
+		} else {
+			log.Printf("✅ Stored validated case in knowledge base: %s (%s)", alertCase.AlertName, alertCase.Category)
+		}
+	}
+
+	return nil
 }
 
 // reactionChecker periodically checks for emoji reactions on analysis messages
@@ -293,6 +354,22 @@ func (p *AlertProcessor) checkPendingReactions() {
 				if !*isCorrect {
 					emoji = "❌"
 				}
+
+				// If feedback is positive and knowledge base is enabled, store the case
+				if *isCorrect && p.knowledgeBase != nil {
+					debugInfo := "" // We could enhance this by storing debug info in PendingFeedback
+					alertCase := knowledge.FromAlert(&pending.Alert, pending.Category, pending.Analysis, debugInfo)
+
+					ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+					defer cancel()
+
+					if err := p.knowledgeBase.Store(ctx, alertCase); err != nil {
+						log.Printf("Warning: failed to store case in knowledge base: %v", err)
+					} else {
+						log.Printf("✅ Stored validated case in knowledge base: %s (%s)", alertCase.AlertName, alertCase.Category)
+					}
+				}
+
 				// Notify user that feedback was recorded
 				confirmMsg := fmt.Sprintf("_Thank you! Your feedback (%s) has been recorded and will help improve future analyses._", emoji)
 				if err := p.slackClient.ReplyToThread(pending.ThreadTS, confirmMsg); err != nil {

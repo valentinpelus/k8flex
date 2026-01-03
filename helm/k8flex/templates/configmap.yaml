@@ -6,6 +6,43 @@ metadata:
   labels:
     {{- include "k8flex.labels" . | nindent 4 }}
 data:
+  # LLM Provider configuration
+  LLM_PROVIDER: {{ .Values.config.llm.provider | default "ollama" | quote }}
+  
+  # Ollama configuration
   OLLAMA_URL: {{ .Values.config.ollama.url | quote }}
   OLLAMA_MODEL: {{ .Values.config.ollama.model | quote }}
+  
+  # OpenAI configuration
+  {{- if .Values.config.openai }}
+  OPENAI_MODEL: {{ .Values.config.openai.model | default "gpt-4-turbo-preview" | quote }}
+  {{- end }}
+  
+  # Anthropic configuration
+  {{- if .Values.config.anthropic }}
+  ANTHROPIC_MODEL: {{ .Values.config.anthropic.model | default "claude-3-5-sonnet-20241022" | quote }}
+  {{- end }}
+  
+  # Gemini configuration
+  {{- if .Values.config.gemini }}
+  GEMINI_MODEL: {{ .Values.config.gemini.model | default "gemini-1.5-pro" | quote }}
+  {{- end }}
+  
+  # AWS Bedrock configuration
+  {{- if .Values.config.bedrock }}
+  BEDROCK_REGION: {{ .Values.config.bedrock.region | default "us-east-1" | quote }}
+  BEDROCK_MODEL: {{ .Values.config.bedrock.model | default "anthropic.claude-3-5-sonnet-20241022-v2:0" | quote }}
+  {{- end }}
+  
+  # Knowledge Base configuration
+  {{- if .Values.knowledgeBase.enabled }}
+  KB_ENABLED: "true"
+  KB_EMBEDDING_PROVIDER: {{ .Values.knowledgeBase.embeddingProvider | default "openai" | quote }}
+  KB_EMBEDDING_MODEL: {{ .Values.knowledgeBase.embeddingModel | default "text-embedding-3-small" | quote }}
+  KB_SIMILARITY_THRESHOLD: {{ .Values.knowledgeBase.similarityThreshold | default "0.75" | quote }}
+  KB_MAX_RESULTS: {{ .Values.knowledgeBase.maxResults | default "5" | quote }}
+  {{- else }}
+  KB_ENABLED: "false"
+  {{- end }}
+  
   PORT: {{ .Values.config.port | quote }}

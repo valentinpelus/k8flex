@@ -1,0 +1,114 @@
+# Example k8flex Helm values with Knowledge Base enabled
+#
+# This configuration enables the vector database knowledge base feature
+# for storing and retrieving validated alert cases.
+#
+# Prerequisites:
+#   1. PostgreSQL 15+ with pgvector extension
+#   2. Run: ./scripts/setup-knowledge-base.sh
+#   3. OpenAI or Gemini API key for embeddings
+
+replicaCount: 1
+
+image:
+  repository: k8flex-agent
+  pullPolicy: IfNotPresent
+  tag: "latest"
+
+# Configuration
+config:
+  llm:
+    provider: "openai"  # Using OpenAI for both LLM and embeddings
+  
+  openai:
+    apiKey: "sk-proj-..."  # Your OpenAI API key
+    model: "gpt-4-turbo-preview"
+
+  port: "8080"
+
+# ⭐ Knowledge Base Configuration
+knowledgeBase:
+  # Enable the knowledge base
+  enabled: true
+  
+  # PostgreSQL connection string
+  # For production, use a Kubernetes secret instead of hardcoding
+  databaseUrl: "postgresql://k8flex:yourpassword@k8flex-db.xxxxx.rds.amazonaws.com:5432/k8flex?sslmode=require"
+  
+  # Use OpenAI for embeddings (will use same API key as LLM)
+  embeddingProvider: "openai"
+  embeddingApiKey: ""  # Empty = use OpenAI API key from above
+  embeddingModel: "text-embedding-3-small"  # Fast and cost-effective
+  
+  # Similarity matching settings
+  similarityThreshold: 0.75  # 75% similarity threshold (recommended: 0.7-0.85)
+  maxResults: 5              # Return top 5 similar cases
+
+# Slack integration
+slack:
+  botToken: "xoxb-..."
+  channelId: "C075DL2PW86"
+  workspaceId: "T075L5TKYDR"
+
+# Webhook security
+webhook:
+  authToken: ""  # Auto-generated if empty
+
+# Persistence for feedback
+persistence:
+  enabled: true
+  size: 1Gi
+
+# Resource limits
+resources:
+  limits:
+    cpu: 500m
+    memory: 512Mi
+  requests:
+    cpu: 100m
+    memory: 128Mi
+
+---
+# Alternative: Using Gemini for embeddings (free tier available)
+knowledgeBase:
+  enabled: true
+  databaseUrl: "postgresql://..."
+  
+  embeddingProvider: "gemini"
+  embeddingApiKey: "AIza..."  # Your Gemini API key
+  embeddingModel: "embedding-001"
+  
+  similarityThreshold: 0.75
+  maxResults: 5
+
+---
+# Production: Using Kubernetes secrets for sensitive data
+# 
+# 1. Create secrets:
+#    kubectl create secret generic k8flex-kb-secret \
+#      --namespace k8flex \
+#      --from-literal=KB_DATABASE_URL='postgresql://...' \
+#      --from-literal=KB_EMBEDDING_API_KEY='sk-...'
+#
+# 2. Mount in deployment (add to deployment.yaml):
+#    env:
+#      - name: KB_DATABASE_URL
+#        valueFrom:
+#          secretKeyRef:
+#            name: k8flex-kb-secret
+#            key: KB_DATABASE_URL
+#      - name: KB_EMBEDDING_API_KEY
+#        valueFrom:
+#          secretKeyRef:
+#            name: k8flex-kb-secret
+#            key: KB_EMBEDDING_API_KEY
+#
+# 3. Set in values.yaml:
+knowledgeBase:
+  enabled: true
+  databaseUrl: ""  # Will be loaded from secret
+  embeddingApiKey: ""  # Will be loaded from secret
+  embeddingProvider: "openai"
+  embeddingModel: "text-embedding-3-small"
+  similarityThreshold: 0.75
+  maxResults: 5

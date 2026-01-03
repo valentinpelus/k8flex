@@ -30,17 +30,29 @@ minikube-load: docker-build
 	@echo "Loading image into Minikube..."
 	minikube image load k8flex-agent:latest
 
-# Deploy to Kubernetes
-deploy:
-	@echo "Deploying to Kubernetes..."
-	kubectl apply -f k8s/deployment.yaml
-	kubectl wait --for=condition=available --timeout=60s deployment/k8flex-agent -n k8flex
+# Deploy to Kubernetes using Helmfile
+helmfile-sync:
+	@echo "Deploying with helmfile..."
+	helmfile sync
 
-# Full deployment (build + load + deploy)
-deploy-kind: kind-load deploy
+# Preview changes before applying
+helmfile-diff:
+	@echo "Showing helmfile diff..."
+	helmfile diff
+
+# Deploy with helmfile (alias)
+deploy: helmfile-sync
+	@echo "✓ Deployed to cluster"
+
+# Full deployment (build + load + helmfile)
+deploy-kind: kind-load
+	@echo "Deploying with helmfile..."
+	helmfile sync
 	@echo "✓ Deployed to Kind cluster"
 
-deploy-minikube: minikube-load deploy
+deploy-minikube: minikube-load
+	@echo "Deploying with helmfile..."
+	helmfile sync
 	@echo "✓ Deployed to Minikube cluster"
 
 # Run locally (requires kubeconfig)
@@ -50,7 +62,7 @@ local-run:
 
 # Test with sample alert
 local-test:
-	@echo "Sending test alert..."
+	helmfile destroy || kubectl delete namespace k8flex
 	curl -XPOST 'http://localhost:8080/webhook' \
 		-H 'Content-Type: application/json' \
 		-d @test-alert.json
@@ -93,9 +105,11 @@ help:
 	@echo "  docker-build   - Build Docker image"
 	@echo "  kind-load      - Build and load image into Kind"
 	@echo "  minikube-load  - Build and load image into Minikube"
-	@echo "  deploy         - Deploy to Kubernetes"
-	@echo "  deploy-kind    - Full deployment to Kind"
-	@echo "  deploy-minikube - Full deployment to Minikube"
+	@echo "  helmfile-sync  - Deploy to Kubernetes using helmfile"
+	@echo "  helmfile-diff  - Preview changes before deploying"
+	@echo "  deploy         - Deploy to Kubernetes (uses helmfile)"
+	@echo "  deploy-kind    - Full deployment to Kind (build + load + helmfile)"
+	@echo "  deploy-minikube - Full deployment to Minikube (build + load + helmfile)"
 	@echo "  local-run      - Run locally"
 	@echo "  local-test     - Test local instance with sample alert"
 	@echo "  logs           - View agent logs"

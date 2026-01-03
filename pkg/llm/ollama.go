@@ -1,4 +1,4 @@
-package ollama
+package llm
 
 import (
 	"bytes"
@@ -12,24 +12,32 @@ import (
 	"github.com/valentinpelus/k8flex/pkg/types"
 )
 
-// Client wraps the Ollama API client
-type Client struct {
+// OllamaProvider implements the Provider interface for Ollama (self-hosted LLMs)
+type OllamaProvider struct {
 	baseURL string
 	model   string
 	client  *http.Client
 }
 
-// NewClient creates a new Ollama client
-func NewClient(baseURL, model string) *Client {
-	return &Client{
+// NewOllamaProvider creates a new Ollama provider
+func NewOllamaProvider(baseURL, model string) *OllamaProvider {
+	if model == "" {
+		model = "llama3" // Default model
+	}
+	return &OllamaProvider{
 		baseURL: baseURL,
 		model:   model,
 		client:  &http.Client{},
 	}
 }
 
-// CategorizeAlert asks Ollama to categorize the alert and determine what debug data is needed
-func (c *Client) CategorizeAlert(alert types.Alert) (string, error) {
+// Name returns the provider name
+func (p *OllamaProvider) Name() string {
+	return fmt.Sprintf("Ollama (%s)", p.model)
+}
+
+// CategorizeAlert asks Ollama to categorize the alert
+func (p *OllamaProvider) CategorizeAlert(alert types.Alert) (string, error) {
 	alertName := alert.Labels["alertname"]
 	severity := alert.Labels["severity"]
 	summary := alert.Annotations["summary"]
@@ -66,7 +74,7 @@ Response: ONE word only
 Category:`, alertName, severity, summary, description)
 
 	reqBody := types.OllamaRequest{
-		Model:  c.model,
+		Model:  p.model,
 		Prompt: prompt,
 		Stream: false,
 	}
@@ -76,7 +84,7 @@ Category:`, alertName, severity, summary, description)
 		return "unknown", fmt.Errorf("failed to marshal request: %w", err)
 	}
 
-	resp, err := c.client.Post(c.baseURL+"/api/generate", "application/json", bytes.NewBuffer(jsonData))
+	resp, err := p.client.Post(p.baseURL+"/api/generate", "application/json", bytes.NewBuffer(jsonData))
 	if err != nil {
 		return "unknown", fmt.Errorf("failed to call Ollama API: %w", err)
 	}
@@ -124,84 +132,12 @@ Category:`, alertName, severity, summary, description)
 	return category, nil
 }
 
-// AnalyzeDebugInfoStream sends debug information to Ollama for streaming analysis with learning from past feedback
-// Reference: https://github.com/ollama/ollama/blob/main/docs/api.md
-func (c *Client) AnalyzeDebugInfoStream(debugInfo string, pastFeedback []types.Feedback, updateFn func(chunk string)) error {
-	// Build compact feedback context if available
-	var feedbackContext string
-	if len(pastFeedback) > 0 {
-		feedbackContext = "\n=== PAST FEEDBACK ===\n"
-		for i, fb := range pastFeedback {
-			status := "✅ CORRECT"
-			if !fb.IsCorrect {
-				status = "❌ WRONG"
-			}
-			// Truncate analysis to first 200 chars
-			analysis := fb.Analysis
-			if len(analysis) > 200 {
-				analysis = analysis[:200] + "..."
-			}
-			feedbackContext += fmt.Sprintf("%d. %s (%s): %s - %s\n", i+1, fb.AlertName, fb.Category, status, analysis)
-		}
-		feedbackContext += "\n"
-	}
-
-	prompt := fmt.Sprintf(`K8s SRE expert: Analyze this incident. Debug info is pre-filtered for this alert only.
-%s
-ANALYSIS RULES:
-1. Base ALL conclusions on the Debug Info below - cite specific evidence
-2. You MAY make logical inferences from the provided metrics and logs
-3. Cross-reference patterns with past incidents (see feedback above) if similar
-4. Quote actual log lines, errors, or metric values when citing evidence
-5. If data is incomplete, state what's missing instead of inventing details
-6. Use your K8s expertise to interpret the data, but DO NOT fabricate scenarios
-7. Also consider severity and alert status in your impact assessment
-8. Provide clear, actionable remediation steps based on evidence
-9. Suggest prevention measures to avoid recurrence
-10. Be concise and structured in your response
-11. Keep in mind that the alert name and description may not cover all aspects of the issue
-12. If the alert name is misleading, rely on the debug info for accurate analysis but in the same moment try to align with the alert context
-13. Distinguish between:
-   - OBSERVED (what debug data shows NOW): "Pod status is Running" ✓
-   - PAST EVENTS (from logs/events): "Pod was OOMKilled 5min ago" ✓  
-   - INFERENCE (logical conclusion): "This COULD indicate..." ✓
-   - FABRICATION (not in data): "Pod has been terminated" ✗
-14. Use conditional language for inferences: "may have", "could be", "likely", "suggests"
-15. Check actual pod/node STATUS before claiming current state
-16. Quote specific log lines, errors, or metrics when citing evidence
-
-Example:
-- WRONG: "The pod has been terminated" (if status shows Running)
-- RIGHT: "The pod experienced an OOMKill event (see logs), but current status shows Running"
-
-Provide analysis using this format (use *text* for bold, not **text**):
-
-*Root Cause:* Most likely cause based on evidence (cite specific metrics/logs)
-*Key Evidence:* Quote ACTUAL lines from debug info
-*Impact:* What's affected (based on provided status/metrics)
-*Actions:*
-• Step 1 (specific to the evidence found)
-• Step 2 (actionable based on data)
-• Step 3 (resolves identified issue)
-*Prevention:*
-• Measure 1 (prevents recurrence of this root cause)
-• Measure 2 (improves monitoring/detection)
-
-Use bullet points (•). Use *bold* for headers. Ground everything in provided data.%s
-
-Debug Info:
-%s
-
-Analysis:`, feedbackContext,
-		func() string {
-			if len(pastFeedback) > 0 {
-				return " Apply lessons from past feedback - use similar patterns if applicable."
-			}
-			return ""
-		}(), debugInfo)
+// AnalyzeDebugInfoStream performs streaming analysis
+func (p *OllamaProvider) AnalyzeDebugInfoStream(debugInfo string, pastFeedback []types.Feedback, updateFn func(chunk string)) error {
+	prompt := BuildAnalysisPrompt(debugInfo, pastFeedback)
 
 	reqBody := types.OllamaRequest{
-		Model:  c.model,
+		Model:  p.model,
 		Prompt: prompt,
 		Stream: true, // Enable streaming
 	}
@@ -211,7 +147,7 @@ Analysis:`, feedbackContext,
 		return fmt.Errorf("failed to marshal request: %w", err)
 	}
 
-	resp, err := c.client.Post(c.baseURL+"/api/generate", "application/json", bytes.NewBuffer(jsonData))
+	resp, err := p.client.Post(p.baseURL+"/api/generate", "application/json", bytes.NewBuffer(jsonData))
 	if err != nil {
 		return fmt.Errorf("failed to call Ollama API: %w", err)
 	}
@@ -247,12 +183,11 @@ Analysis:`, feedbackContext,
 	return nil
 }
 
-// AnalyzeDebugInfo sends debug information to Ollama for analysis with learning from past feedback (non-streaming)
-// Reference: https://github.com/ollama/ollama/blob/main/docs/api.md
-func (c *Client) AnalyzeDebugInfo(debugInfo string, pastFeedback []types.Feedback) (string, error) {
+// AnalyzeDebugInfo performs non-streaming analysis
+func (p *OllamaProvider) AnalyzeDebugInfo(debugInfo string, pastFeedback []types.Feedback) (string, error) {
 	var fullResponse strings.Builder
 
-	err := c.AnalyzeDebugInfoStream(debugInfo, pastFeedback, func(chunk string) {
+	err := p.AnalyzeDebugInfoStream(debugInfo, pastFeedback, func(chunk string) {
 		fullResponse.WriteString(chunk)
 	})
 

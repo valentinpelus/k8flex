@@ -1,8 +1,17 @@
 repositories: []
 
+helmDefaults:
+  # Enable helm-secrets plugin for SOPS decryption
+  verify: false
+  wait: true
+  timeout: 600
+  createNamespace: true
+
 releases:
   - name: k8flex
     namespace: k8flex
     chart: ./helm/k8flex
     values:
       - ./helm/k8flex/values.yaml
+      # SOPS-encrypted secrets (decrypted automatically by helm-secrets plugin)
+      - ./helm/k8flex/secrets.yaml
