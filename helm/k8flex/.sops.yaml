@@ -1,0 +1,48 @@
+# SOPS Configuration for k8flex Helm Chart
+# This file defines which fields in secrets.yaml should be encrypted
+
+# Creation rules for new files
+creation_rules:
+  # Encrypt secrets.yaml with age
+  - path_regex: secrets\.yaml$
+    encrypted_regex: ^(llmSecrets|slackSecrets|webhookSecrets|knowledgeBaseSecrets|.*apiKey.*|.*token.*|.*password.*|.*databaseUrl.*)$
+    # Choose ONE encryption method below:
+    
+    # Option 1: age (recommended for local development)
+    # Generate key: age-keygen -o ~/.config/sops/age/keys.txt
+    # age: age1your_public_key_here
+    
+    # Option 2: AWS KMS (recommended for AWS/EKS)
+    # kms: arn:aws:kms:us-east-1:123456789012:key/your-kms-key-id
+    
+    # Option 3: GCP KMS (recommended for GKE)
+    # gcp_kms: projects/your-project/locations/global/keyRings/sops/cryptoKeys/sops-key
+    
+    # Option 4: Azure Key Vault (recommended for AKS)
+    # azure_keyvault: https://your-vault.vault.azure.net/keys/sops-key/version
+    
+    # Option 5: PGP (traditional GPG keys)
+    # pgp: YOUR_PGP_FINGERPRINT
+
+# Example configurations:
+
+# For local development with age:
+# creation_rules:
+#   - path_regex: secrets\.yaml$
+#     encrypted_regex: ^(llmSecrets|slackSecrets|webhookSecrets|knowledgeBaseSecrets)$
+#     age: age1234567890abcdefghijklmnopqrstuvwxyz1234567890abcdefghijk
+
+# For AWS EKS with KMS:
+# creation_rules:
+#   - path_regex: secrets\.yaml$
+#     encrypted_regex: ^(llmSecrets|slackSecrets|webhookSecrets|knowledgeBaseSecrets)$
+#     kms: arn:aws:kms:us-east-1:123456789012:key/12345678-1234-1234-1234-123456789012
+
+# For multiple recipients (team members):
+# creation_rules:
+#   - path_regex: secrets\.yaml$
+#     encrypted_regex: ^(llmSecrets|slackSecrets|webhookSecrets|knowledgeBaseSecrets)$
+#     age: >-
+#       age1teammate1pubkey,
+#       age1teammate2pubkey,
+#       age1teammate3pubkey

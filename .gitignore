@@ -23,3 +23,11 @@ Thumbs.db
 
 # Kubernetes
 *.kubeconfig
+# Secrets (SOPS)
+# Only commit encrypted versions
+secrets.dec.yaml
+secrets.yaml.dec
+**/secrets-*.dec.yaml
+**/*secrets*.dec.yaml
+# Allow encrypted secrets.yaml (will have sops: metadata)
+# Do NOT add: secrets.yaml

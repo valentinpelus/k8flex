@@ -7,8 +7,9 @@ import (
 	"github.com/valentinpelus/k8flex/internal/debugger"
 	"github.com/valentinpelus/k8flex/internal/processor"
 	"github.com/valentinpelus/k8flex/pkg/feedback"
+	"github.com/valentinpelus/k8flex/pkg/knowledge"
 	"github.com/valentinpelus/k8flex/pkg/kubernetes"
-	"github.com/valentinpelus/k8flex/pkg/ollama"
+	"github.com/valentinpelus/k8flex/pkg/llm"
 	"github.com/valentinpelus/k8flex/pkg/slack"
 )
 
@@ -16,7 +17,7 @@ import (
 type App struct {
 	Config          *config.Config
 	K8sClient       *kubernetes.Client
-	OllamaClient    *ollama.Client
+	LLMProvider     llm.Provider
 	SlackClient     *slack.Client
 	FeedbackManager *feedback.Manager
 	AlertProcessor  *processor.AlertProcessor
@@ -34,8 +35,34 @@ func New() (*App, error) {
 	}
 	k8sClient := kubernetes.NewClient(clientset)
 
-	// Initialize Ollama client
-	ollamaClient := ollama.NewClient(cfg.OllamaURL, cfg.OllamaModel)
+	// Initialize LLM provider based on configuration
+	var llmProvider llm.Provider
+	llmConfig := llm.Config{
+		Provider:        cfg.LLMProvider,
+		OllamaURL:       cfg.OllamaURL,
+		OllamaModel:     cfg.OllamaModel,
+		OpenAIAPIKey:    cfg.OpenAIAPIKey,
+		OpenAIModel:     cfg.OpenAIModel,
+		AnthropicAPIKey: cfg.AnthropicAPIKey,
+		AnthropicModel:  cfg.AnthropicModel,
+		GeminiAPIKey:    cfg.GeminiAPIKey,
+		GeminiModel:     cfg.GeminiModel,
+		BedrockRegion:   cfg.BedrockRegion,
+		BedrockModel:    cfg.BedrockModel,
+	}
+
+	// For Ollama, use the new OllamaProvider from llm package
+	if llmConfig.Provider == "ollama" || llmConfig.Provider == "" {
+		llmProvider = llm.NewOllamaProvider(cfg.OllamaURL, cfg.OllamaModel)
+	} else {
+		factory := llm.NewFactory(llmConfig)
+		llmProvider, err = factory.CreateProvider()
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	log.Printf("Using LLM provider: %s", llmProvider.Name())
 
 	// Initialize Slack client
 	slackClient := slack.NewClient(cfg.SlackWebhookURL, cfg.SlackBotToken, cfg.SlackChannelID)
@@ -57,11 +84,50 @@ func New() (*App, error) {
 	// Initialize feedback manager
 	feedbackManager := feedback.NewManager("/data/feedback.json")
 
+	// Initialize knowledge base (if enabled)
+	var knowledgeBase *knowledge.KnowledgeBase
+	if cfg.KnowledgeBaseEnabled {
+		if cfg.KnowledgeBaseDatabaseURL == "" {
+			log.Printf("WARNING: Knowledge base enabled but KB_DATABASE_URL not configured")
+		} else {
+			// Determine API key for embeddings
+			embeddingAPIKey := cfg.KnowledgeBaseAPIKey
+			if embeddingAPIKey == "" {
+				// Fallback to LLM provider API key if not separately configured
+				switch cfg.KnowledgeBaseEmbedding {
+				case "openai":
+					embeddingAPIKey = cfg.OpenAIAPIKey
+				case "gemini":
+					embeddingAPIKey = cfg.GeminiAPIKey
+				}
+			}
+
+			kbConfig := &knowledge.KnowledgeBaseConfig{
+				DatabaseURL:         cfg.KnowledgeBaseDatabaseURL,
+				EmbeddingProvider:   cfg.KnowledgeBaseEmbedding,
+				EmbeddingAPIKey:     embeddingAPIKey,
+				EmbeddingModel:      cfg.KnowledgeBaseModel,
+				SimilarityThreshold: float32(cfg.KnowledgeBaseSimilarity),
+				MaxSimilarCases:     cfg.KnowledgeBaseMaxResults,
+			}
+
+			var err error
+			knowledgeBase, err = knowledge.NewKnowledgeBase(kbConfig)
+			if err != nil {
+				log.Printf("WARNING: Failed to initialize knowledge base: %v", err)
+				log.Printf("Continuing without knowledge base support")
+			} else {
+				log.Printf("✅ Knowledge base enabled: %s embeddings, similarity threshold: %.2f",
+					cfg.KnowledgeBaseEmbedding, cfg.KnowledgeBaseSimilarity)
+			}
+		}
+	}
+
 	// Initialize debugger
 	dbg := debugger.New(k8sClient)
 
 	// Initialize alert processor
-	alertProcessor := processor.NewAlertProcessor(dbg, ollamaClient, slackClient, feedbackManager)
+	alertProcessor := processor.NewAlertProcessor(dbg, llmProvider, slackClient, feedbackManager, knowledgeBase)
 
 	// Log feedback stats
 	total, correct, incorrect := feedbackManager.GetStats()
@@ -72,7 +138,7 @@ func New() (*App, error) {
 	return &App{
 		Config:          cfg,
 		K8sClient:       k8sClient,
-		OllamaClient:    ollamaClient,
+		LLMProvider:     llmProvider,
 		SlackClient:     slackClient,
 		FeedbackManager: feedbackManager,
 		AlertProcessor:  alertProcessor,
@@ -82,7 +148,7 @@ func New() (*App, error) {
 // LogStartupInfo logs application startup information
 func (a *App) LogStartupInfo() {
 	log.Printf("Starting K8flex AI Debug Agent on port %s", a.Config.Port)
-	log.Printf("Ollama URL: %s, Model: %s", a.Config.OllamaURL, a.Config.OllamaModel)
+	log.Printf("LLM Provider: %s", a.LLMProvider.Name())
 
 	if a.Config.WebhookAuthToken != "" {
 		log.Printf("Webhook authentication: enabled (Bearer token required)")

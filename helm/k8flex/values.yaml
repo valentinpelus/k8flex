@@ -1,6 +1,18 @@
 # Default values for k8flex.
 # This is a YAML-formatted file.
 # Declare variables to be passed into your templates.
+#
+# SECURITY NOTE:
+# Sensitive values (API keys, tokens, passwords) should be stored in secrets.yaml
+# and encrypted with SOPS before committing to git.
+# See SOPS_USAGE.md for detailed instructions.
+#
+# Quick start:
+#   1. Copy sensitive values to secrets.yaml
+#   2. Encrypt: sops --encrypt --in-place secrets.yaml
+#   3. Deploy: helm secrets upgrade k8flex . --values values.yaml --values secrets.yaml
+#
+# The secrets.yaml file will override any values set here.
 
 replicaCount: 1
 
@@ -18,6 +30,9 @@ serviceAccount:
   # Specifies whether a service account should be created
   create: true
   # Annotations to add to the service account
+  # For AWS Bedrock, add IAM role annotation:
+  # annotations:
+  #   eks.amazonaws.com/role-arn: arn:aws:iam::ACCOUNT_ID:role/k8flex-bedrock-role
   annotations: {}
   # The name of the service account to use.
   # If not set and create is true, a name is generated using the fullname template
@@ -71,31 +86,93 @@ rbac:
 
 # Configuration
 config:
-  # Ollama settings
+  # LLM Provider selection
+  llm:
+    # Provider: ollama, openai, anthropic (claude), gemini, bedrock (aws)
+    provider: "ollama"
+  
+  # Ollama settings (if provider=ollama)
   ollama:
     url: "http://ollama.ollama.svc.cluster.local:11434"
     model: "llama3"
   
+  # OpenAI settings (if provider=openai)
+  openai:
+    apiKey: ""  # Set in secrets.yaml (SOPS-encrypted)
+    model: "gpt-4-turbo-preview"  # Options: gpt-4-turbo-preview, gpt-4, gpt-3.5-turbo
+  
+  # Anthropic Claude settings (if provider=anthropic)
+  anthropic:
+    apiKey: ""  # Set in secrets.yaml (SOPS-encrypted)
+    model: "claude-3-5-sonnet-20241022"  # Options: claude-3-opus-20240229, claude-3-5-sonnet-20241022
+  
+  # Google Gemini settings (if provider=gemini)
+  gemini:
+    apiKey: ""  # Set in secrets.yaml (SOPS-encrypted)
+    model: "gemini-1.5-pro"  # Options: gemini-1.5-pro, gemini-pro
+  
+  # AWS Bedrock settings (if provider=bedrock)
+  # Uses IAM role/credentials from pod's service account or environment
+  bedrock:
+    region: "us-east-1"  # AWS region where Bedrock is enabled
+    model: "anthropic.claude-3-5-sonnet-20241022-v2:0"  # Model ID in Bedrock
+    # Other options:
+    # - anthropic.claude-3-opus-20240229-v1:0
+    # - anthropic.claude-3-sonnet-20240229-v1:0
+    # - amazon.titan-text-express-v1
+    # - ai21.j2-ultra-v1
+  
   # Application port
   port: "8080"
 
+# Knowledge Base (Vector Database for similar case retrieval)
+knowledgeBase:
+  # Enable knowledge base for storing and retrieving validated alert cases
+  enabled: false
+  
+  # PostgreSQL database URL with pgvector extension
+  # Format: postgresql://username:password@hostname:port/database?sslmode=require
+  # Set in secrets.yaml (SOPS-encrypted)
+  databaseUrl: ""
+  
+  # Embedding provider for vector generation
+  # Options: "openai" or "gemini"
+  embeddingProvider: "openai"
+  
+  # API key for embedding provider (if different from LLM provider)
+  # Leave empty to use the same API key as the LLM provider
+  # Set in secrets.yaml (SOPS-encrypted) if needed
+  embeddingApiKey: ""
+  
+  # Embedding model to use
+  # OpenAI: text-embedding-3-small (default, 1536 dims), text-embedding-3-large (3072 dims)
+  # Gemini: embedding-001 (768 dims)
+  embeddingModel: "text-embedding-3-small"
+  
+  # Similarity threshold for matching (0.0 to 1.0, default: 0.75)
+  # Higher values = stricter matching, lower values = more matches
+  similarityThreshold: 0.75
+  
+  # Maximum number of similar cases to retrieve (default: 5)
+  maxResults: 5
+
 # Slack integration
 slack:
-  # Use Bot token for threading support (recommended)
-  botToken: ""  # Replace with your actual bot token
-  channelId: ""
+  # Set in secrets.yaml (SOPS-encrypted)
+  botToken: ""
+  channelId: "C075DL2PW86"
   # Workspace ID for building Slack links (e.g., "T01234567")
   # Find it in your Slack URL: https://YOUR-WORKSPACE.slack.com
-  workspaceId: ""
+  workspaceId: "T075L5TKYDR"
   
   # OR use webhook URL (no threading support)
+  # Set in secrets.yaml (SOPS-encrypted)
   webhookUrl: ""
 
-# Webhook security
+# Webhook authentication (set in secrets.yaml)
 webhook:
-  # Authentication token for webhook endpoint
-  # Leave empty to auto-generate a secure random token (recommended)
-  # Or provide your own: openssl rand -hex 32
+  # Set in secrets.yaml (SOPS-encrypted)
+  # Generate with: openssl rand -hex 32
   authToken: ""
 
 # Persistence for feedback storage
