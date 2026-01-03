@@ -51,11 +51,20 @@ func (p *AlertProcessor) ProcessAlert(alert types.Alert) {
 		}
 	}
 
-	// Gather debug information
-	ctx := context.Background()
-	debugInfo := p.debugger.GatherDebugInfo(ctx, alert)
+	// Phase 1: Ask Ollama to categorize the alert
+	log.Printf("Asking Ollama to categorize alert: %s", alert.Labels["alertname"])
+	category, err := p.ollamaClient.CategorizeAlert(alert)
+	if err != nil {
+		log.Printf("Error categorizing alert: %v, using 'unknown'", err)
+		category = "unknown"
+	}
+	log.Printf("Ollama categorized alert as: %s", category)
 
-	// Analyze with Ollama
+	// Phase 2: Gather only relevant debug information based on category
+	ctx := context.Background()
+	debugInfo := p.debugger.GatherDebugInfo(ctx, alert, category)
+
+	// Phase 3: Analyze with Ollama using the targeted debug info
 	log.Printf("Sending debug info to Ollama for analysis")
 	analysis, err := p.ollamaClient.AnalyzeDebugInfo(debugInfo)
 	if err != nil {
