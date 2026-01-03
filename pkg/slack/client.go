@@ -53,11 +53,23 @@ func (c *Client) SendAlert(alert types.Alert) (string, error) {
 // SendAnalysis sends the analysis to Slack as a threaded reply
 func (c *Client) SendAnalysis(alert types.Alert, analysis string, threadTS string) error {
 	if c.HasBotToken() && threadTS != "" {
-		return c.sendAnalysisWithBot(alert, analysis, threadTS)
+		_, err := c.sendAnalysisWithBot(alert, analysis, threadTS)
+		return err
 	} else if c.webhookURL != "" {
 		return c.sendAnalysisWithWebhook(alert, analysis, threadTS)
 	}
 	return nil
+}
+
+// SendAnalysisInThread sends analysis in a thread and returns the message timestamp for updates
+func (c *Client) SendAnalysisInThread(alert types.Alert, analysis string, threadTS string) (string, error) {
+	if c.HasBotToken() && threadTS != "" {
+		return c.sendAnalysisWithBot(alert, analysis, threadTS)
+	} else if c.webhookURL != "" {
+		err := c.sendAnalysisWithWebhook(alert, analysis, threadTS)
+		return "", err
+	}
+	return "", nil
 }
 
 // sendAlertWithBot sends an alert using the Slack Bot token API
@@ -116,8 +128,8 @@ func (c *Client) sendAlertWithWebhook(alert types.Alert) (string, error) {
 	return slackResp.TS, nil
 }
 
-// sendAnalysisWithBot sends analysis using the Slack Bot token API
-func (c *Client) sendAnalysisWithBot(_ types.Alert, analysis string, threadTS string) error {
+// sendAnalysisWithBot sends analysis using the Slack Bot token API and returns message timestamp
+func (c *Client) sendAnalysisWithBot(_ types.Alert, analysis string, threadTS string) (string, error) {
 	message := types.SlackMessage{
 		Channel:     c.channelID,
 		ThreadTS:    threadTS,
@@ -127,7 +139,7 @@ func (c *Client) sendAnalysisWithBot(_ types.Alert, analysis string, threadTS st
 				Type: "section",
 				Text: &types.SlackTextObject{
 					Type: "mrkdwn",
-					Text: "*🔍 AI Debug Analysis Complete*",
+					Text: "*🔍 AI Debug Analysis*",
 				},
 			},
 			{
@@ -137,19 +149,13 @@ func (c *Client) sendAnalysisWithBot(_ types.Alert, analysis string, threadTS st
 				Type: "section",
 				Text: &types.SlackTextObject{
 					Type: "mrkdwn",
-					Text: fmt.Sprintf("```\n%s\n```", truncateForSlack(analysis, 2900)),
+					Text: truncateForSlack(analysis, 2900),
 				},
 			},
 		},
 	}
 
-	_, err := c.postMessage(message)
-	if err != nil {
-		return err
-	}
-
-	log.Printf("Analysis sent to Slack thread: %s", threadTS)
-	return nil
+	return c.postMessage(message)
 }
 
 // sendAnalysisWithWebhook sends analysis using Slack incoming webhook
@@ -338,4 +344,48 @@ func truncateForSlack(text string, maxLen int) string {
 		return text
 	}
 	return text[:maxLen] + "\n... (truncated)"
+}
+
+// UpdateMessage updates an existing Slack message (requires Bot token)
+func (c *Client) UpdateMessage(messageTS, newText string) error {
+	if !c.HasBotToken() {
+		return fmt.Errorf("Bot token required for message updates")
+	}
+
+	updatePayload := map[string]interface{}{
+		"channel": c.channelID,
+		"ts":      messageTS,
+		"text":    truncateForSlack(newText, 3000),
+	}
+
+	jsonData, err := json.Marshal(updatePayload)
+	if err != nil {
+		return fmt.Errorf("failed to marshal update payload: %w", err)
+	}
+
+	req, err := http.NewRequest("POST", "https://slack.com/api/chat.update", bytes.NewBuffer(jsonData))
+	if err != nil {
+		return fmt.Errorf("failed to create request: %w", err)
+	}
+
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+c.botToken)
+
+	resp, err := c.client.Do(req)
+	if err != nil {
+		return fmt.Errorf("failed to update message: %w", err)
+	}
+	defer resp.Body.Close()
+
+	body, _ := io.ReadAll(resp.Body)
+	var slackResp types.SlackResponse
+	if err := json.Unmarshal(body, &slackResp); err != nil {
+		return fmt.Errorf("failed to parse response: %w", err)
+	}
+
+	if !slackResp.OK {
+		return fmt.Errorf("Slack error: %s", slackResp.Error)
+	}
+
+	return nil
 }
