@@ -10,6 +10,7 @@ type Config struct {
 	SlackWebhookURL  string
 	SlackBotToken    string
 	SlackChannelID   string
+	SlackWorkspaceID string
 	WebhookAuthToken string
 }
 
@@ -22,6 +23,7 @@ func LoadConfig() *Config {
 		SlackWebhookURL:  getEnv("SLACK_WEBHOOK_URL", ""),
 		SlackBotToken:    getEnv("SLACK_BOT_TOKEN", ""),
 		SlackChannelID:   getEnv("SLACK_CHANNEL_ID", ""),
+		SlackWorkspaceID: getEnv("SLACK_WORKSPACE_ID", ""),
 		WebhookAuthToken: getEnv("WEBHOOK_AUTH_TOKEN", ""),
 	}
 }

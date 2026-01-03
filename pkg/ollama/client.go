@@ -161,6 +161,18 @@ ANALYSIS RULES:
 10. Be concise and structured in your response
 11. Keep in mind that the alert name and description may not cover all aspects of the issue
 12. If the alert name is misleading, rely on the debug info for accurate analysis but in the same moment try to align with the alert context
+13. Distinguish between:
+   - OBSERVED (what debug data shows NOW): "Pod status is Running" ✓
+   - PAST EVENTS (from logs/events): "Pod was OOMKilled 5min ago" ✓  
+   - INFERENCE (logical conclusion): "This COULD indicate..." ✓
+   - FABRICATION (not in data): "Pod has been terminated" ✗
+14. Use conditional language for inferences: "may have", "could be", "likely", "suggests"
+15. Check actual pod/node STATUS before claiming current state
+16. Quote specific log lines, errors, or metrics when citing evidence
+
+Example:
+- WRONG: "The pod has been terminated" (if status shows Running)
+- RIGHT: "The pod experienced an OOMKill event (see logs), but current status shows Running"
 
 Provide analysis using this format (use *text* for bold, not **text**):
 

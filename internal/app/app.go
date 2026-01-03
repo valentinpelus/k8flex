@@ -39,6 +39,20 @@ func New() (*App, error) {
 
 	// Initialize Slack client
 	slackClient := slack.NewClient(cfg.SlackWebhookURL, cfg.SlackBotToken, cfg.SlackChannelID)
+	if cfg.SlackWorkspaceID != "" {
+		slackClient.SetWorkspaceID(cfg.SlackWorkspaceID)
+		log.Printf("Slack workspace ID configured: %s", cfg.SlackWorkspaceID)
+	}
+
+	// Validate Slack bot scopes if bot token is configured
+	if cfg.SlackBotToken != "" && cfg.SlackChannelID != "" {
+		if err := slackClient.ValidateScopes(); err != nil {
+			log.Printf("WARNING: Slack bot scope validation failed: %v", err)
+			log.Printf("Feedback detection requires 'reactions:read' scope. Add it at https://api.slack.com/apps")
+		} else {
+			log.Printf("Slack bot scopes validated successfully")
+		}
+	}
 
 	// Initialize feedback manager
 	feedbackManager := feedback.NewManager("/data/feedback.json")
