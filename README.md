@@ -1,285 +1,188 @@
 # K8flex - AI-Powered Kubernetes Debug Agent
 
-An intelligent debugging agent that receives Alertmanager webhooks and performs automated first-level analysis of Kubernetes issues using AI.
+AI-powered incident response agent that receives Alertmanager webhooks and performs automated Kubernetes debugging. Learns from feedback and maintains a knowledge base for faster resolution.
 
 ## Features
 
-- **Webhook Receiver**: Accepts Alertmanager webhook notifications
-- **Automated Debugging**: Performs comprehensive Kubernetes resource analysis:
-  - Pod log collection (last 100 lines)
-  - Pod description and status
-  - Recent namespace events
-  - Service and endpoint checks
-  - Network policy analysis
-  - Resource usage and limits
-- **AI Analysis**: Uses Ollama to synthesize findings and deduce root causes
-- **Slack Integration**: Posts alerts and AI analysis to Slack channels with threading
-- **Label-Driven**: Extracts all parameters from alert labels (no fake data)
-
-## Architecture
-
-```
-Alertmanager → K8flex Agent → Kubernetes API
-                    ↓
-                Ollama API
-                    ↓
-         AI Analysis → Slack (optional)
-                    ↓
-                  Logs
-```
-
-## Prerequisites
-
-- Kubernetes cluster with:
-  - Prometheus & Alertmanager installed
-  - Ollama deployed (see deployment guide below)
-- kubectl configured
-- Docker (for building image)
+- **Automated Debugging**: Gathers logs, events, pod status, services, and network policies from Kubernetes
+- **Multi-LLM Support**: Ollama (self-hosted), OpenAI, Anthropic Claude, Google Gemini, or AWS Bedrock
+- **Real-Time Streaming**: Analysis streams progressively to Slack as it develops
+- **Learning System**: Rate analyses with ✅/❌ in Slack; system learns from feedback
+- **Knowledge Base** (Optional): PostgreSQL + pgvector for semantic search of past incidents
+- **Slack Integration**: Threaded conversations with historical context links
 
 ## Quick Start
 
-### 1. Build and Deploy
+### 1. Choose LLM Provider
+
+**Ollama (Self-hosted)**
+```bash
+export LLM_PROVIDER=ollama
+export OLLAMA_URL=http://ollama.ollama.svc.cluster.local:11434
+export OLLAMA_MODEL=llama3
+```
+
+**OpenAI / Claude / Gemini**
+```bash
+export LLM_PROVIDER=openai  # or anthropic, gemini, bedrock
+export OPENAI_API_KEY=sk-...
+export OPENAI_MODEL=gpt-4-turbo-preview
+```
+
+See [LLM_PROVIDERS.md](docs/LLM_PROVIDERS.md) for all options.
+
+### 2. Deploy
 
 ```bash
-# Build the Docker image
 docker build -t k8flex-agent:latest .
-
-# For Kind/Minikube, load the image
-kind load docker-image k8flex-agent:latest
-# or
-minikube image load k8flex-agent:latest
-
-# Deploy to Kubernetes
 kubectl apply -f k8s/deployment.yaml
 ```
 
-### 2. Configure Alertmanager
-
-Add the k8flex webhook receiver to your Alertmanager configuration:
+### 3. Configure Alertmanager
 
 ```yaml
 receivers:
   - name: 'k8flex-ai-debug'
     webhook_configs:
       - url: 'http://k8flex-agent.k8flex.svc.cluster.local:8080/webhook'
-        send_resolved: false
-
-route:
-  routes:
-    - match:
-        severity: critical
-      receiver: 'k8flex-ai-debug'
-      continue: true  # Also send to other receivers
 ```
 
-Or apply the example configuration:
+Full setup: [INTEGRATION.md](INTEGRATION.md)
+
+### 4. Optional: Slack Integration
 
 ```bash
-kubectl apply -f k8s/alertmanager-config.yaml
+export SLACK_BOT_TOKEN=xoxb-...
+export SLACK_CHANNEL_ID=C01234567
 ```
 
-### 3. Deploy Ollama (if not already installed)
+Required scopes: `chat:write`, `chat:write.public`, `reactions:read`  
+Details: [SLACK_SETUP.md](docs/SLACK_SETUP.md)
+
+### 5. Optional: Knowledge Base
 
 ```bash
-# Example Ollama deployment
-kubectl create namespace ollama
-
-kubectl apply -f - <<EOF
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: ollama
-  namespace: ollama
-spec:
-  replicas: 1
-  selector:
-    matchLabels:
-      app: ollama
-  template:
-    metadata:
-      labels:
-        app: ollama
-    spec:
-      containers:
-      - name: ollama
-        image: ollama/ollama:latest
-        ports:
-        - containerPort: 11434
-        resources:
-          requests:
-            memory: "4Gi"
-            cpu: "2"
-          limits:
-            memory: "8Gi"
-            cpu: "4"
----
-apiVersion: v1
-kind: Service
-metadata:
-  name: ollama
-  namespace: ollama
-spec:
-  selector:
-    app: ollama
-  ports:
-  - port: 11434
-    targetPort: 11434
-EOF
-
-# Pull the model
-kubectl exec -n ollama deployment/ollama -- ollama pull llama2
+export KB_ENABLED=true
+export KB_DATABASE_URL="postgresql://user:pass@host:5432/k8flex"
+export KB_EMBEDDING_PROVIDER=openai
 ```
 
-### 4. Test with a Sample Alert
+Setup: [KNOWLEDGE_BASE.md](docs/KNOWLEDGE_BASE.md)
 
-```bash
-kubectl run test-pod --image=nginx --restart=Never
-kubectl delete pod test-pod
+## How It Works
 
-# Or send a webhook directly
-curl -XPOST 'http://k8flex-agent.k8flex.svc.cluster.local:8080/webhook' \
-  -H 'Content-Type: application/json' \
-  -d '{
-    "version": "4",
-    "groupKey": "test",
-    "status": "firing",
-    "alerts": [{
-      "status": "firing",
-      "labels": {
-        "alertname": "PodCrashLooping",
-        "severity": "critical",
-        "namespace": "default",
-        "pod": "test-pod"
-      },
-      "annotations": {
-        "summary": "Pod is crash looping",
-        "description": "The pod has restarted multiple times"
-      },
-      "startsAt": "2026-01-02T10:00:00Z"
-    }]
-  }'
-```
+1. Alertmanager sends webhook → K8flex receives alert
+2. AI categorizes alert type (pod/service/node/network/resource)
+3. System searches knowledge base for similar past cases (if enabled)
+4. Gathers targeted Kubernetes debug information
+5. AI analyzes and streams results to Slack in real-time
+6. Users rate analysis with ✅/❌ reactions
+7. Validated solutions stored for future incidents
 
 ## Configuration
 
-Environment variables (configured in ConfigMap):
+### Key Environment Variables
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `OLLAMA_URL` | `http://ollama.ollama.svc.cluster.local:11434` | Ollama API endpoint |
-| `OLLAMA_MODEL` | `llama2` | Ollama model to use |
-| `PORT` | `8080` | HTTP server port |
+| `LLM_PROVIDER` | `ollama` | `ollama`, `openai`, `anthropic`, `gemini`, `bedrock` |
+| `OLLAMA_URL` | `http://ollama.ollama.svc.cluster.local:11434` | Ollama endpoint |
+| `OLLAMA_MODEL` | `llama3` | Model name |
+| `OPENAI_API_KEY` | - | OpenAI API key |
+| `SLACK_BOT_TOKEN` | - | Slack bot token (for advanced features) |
+| `SLACK_CHANNEL_ID` | - | Slack channel ID |
+| `KB_ENABLED` | `false` | Enable knowledge base |
+| `KB_DATABASE_URL` | - | PostgreSQL connection string |
+| `WEBHOOK_AUTH_TOKEN` | - | Webhook authentication token |
 
-## Alert Label Requirements
+Full reference: See **Complete Configuration Reference** section below or [Configuration Documentation](docs/).
 
-The agent extracts debugging parameters from alert labels:
+### Slack Scopes Required
 
+For feedback system and threading:
+- `chat:write` - Post messages
+- `chat:write.public` - Post to public channels
+- `reactions:read` - Detect emoji reactions
+
+## Alert Requirements
+
+Alerts must include these labels:
 - `namespace` (required): Kubernetes namespace
-- `pod` (optional): Pod name to debug
-- `service` (optional): Service name to check
+- `pod` (optional): Pod name
+- `service` (optional): Service name
 - `alertname`: Alert identifier
 - `severity`: Alert severity
 
-Example alert with proper labels:
-
+Example:
 ```yaml
 - alert: PodNotReady
   expr: kube_pod_status_phase{phase!="Running"} == 1
   labels:
-    severity: warning
     namespace: "{{ $labels.namespace }}"
     pod: "{{ $labels.pod }}"
-  annotations:
-    summary: "Pod {{ $labels.pod }} is not ready"
-```
-
-## Debugging Functions
-
-The agent performs these checks automatically:
-
-1. **Pod Logs**: Last 100 lines from the pod
-2. **Pod Description**: Status, conditions, container states
-3. **Events**: Recent events in the namespace
-4. **Service Check**: Service configuration and endpoints
-5. **Network Check**: Pod IPs and network policies
-6. **Resource Check**: CPU/memory requests, limits, and probes
-
-## AI Analysis
-
-The agent sends all collected data to Ollama with a structured prompt requesting:
-
-1. **Root Cause Analysis**: Most likely cause
-2. **Evidence**: Supporting data
-3. **Impact Assessment**: What's affected
-4. **Recommended Actions**: Immediate steps
-5. **Prevention**: Future recommendations
-
-## Monitoring
-
-Check agent logs:
-
-```bash
-kubectl logs -n k8flex deployment/k8flex-agent -f
-```
-
-Health check:
-
-```bash
-kubectl exec -n k8flex deployment/k8flex-agent -- wget -qO- http://localhost:8080/health
+    severity: warning
 ```
 
 ## Development
 
-### Local Testing
-
 ```bash
-# Run locally (requires kubeconfig)
+# Local testing
 go run main.go
 
 # Test webhook
 curl -XPOST 'http://localhost:8080/webhook' \
   -H 'Content-Type: application/json' \
   -d @test-alert.json
-```
-
-### Building
-
-```bash
-# Download dependencies
-go mod download
 
 # Build
 go build -o k8flex-agent .
 ```
 
-## Security Considerations
-
-- The agent requires read-only access to cluster resources (RBAC configured)
-- Does not access Secret data, only metadata
-- Runs with minimal privileges using ServiceAccount
-- All communication within cluster uses internal DNS
-
-## References
-
-- [Alertmanager Webhook Config](https://prometheus.io/docs/alerting/latest/configuration/#webhook_config)
-- [Kubernetes client-go](https://pkg.go.dev/k8s.io/client-go)
-- [Ollama API Documentation](https://github.com/ollama/ollama/blob/main/docs/api.md)
-- [Kubernetes RBAC](https://kubernetes.io/docs/reference/access-authn-authz/rbac/)
-- [Slack Incoming Webhooks](https://api.slack.com/messaging/webhooks)
-
 ## Documentation
 
-- **[README.md](README.md)** - This file, main documentation
-- **[QUICKSTART.md](QUICKSTART.md)** - Quick reference guide
-- **[INTEGRATION.md](INTEGRATION.md)** - Alertmanager and Prometheus setup
-- **[SLACK_SETUP.md](SLACK_SETUP.md)** - Slack integration guide
-- **[SLACK_INTEGRATION.md](SLACK_INTEGRATION.md)** - Slack feature summary
+- **[INTEGRATION.md](docs/INTEGRATION.md)** - Alertmanager/Prometheus setup
+- **[ARCHITECTURE.md](docs/ARCHITECTURE.md)** - Complete architecture and workflow
+- **[QUICKSTART.md](docs/QUICKSTART.md)** - Quick reference and examples
+- **[USE_CASES.md](docs/USE_CASES.md)** - Use cases, benefits, and best practices
+- **[LLM_PROVIDERS.md](docs/LLM_PROVIDERS.md)** - All LLM provider configs
+- **[SLACK_SETUP.md](docs/SLACK_SETUP.md)** - Slack bot configuration
+- **[FEEDBACK.md](docs/FEEDBACK.md)** - Feedback system details
+- **[KNOWLEDGE_BASE.md](docs/KNOWLEDGE_BASE.md)** - Vector database setup
+- **[WEBHOOK_SECURITY.md](docs/WEBHOOK_SECURITY.md)** - Webhook authentication
 
-## Scripts
+## Complete Configuration Reference
 
-- **[setup-slack.sh](setup-slack.sh)** - Configure Slack webhook URL
-- **[test-integration.sh](test-integration.sh)** - Test complete setup
-- **[deploy.sh](deploy.sh)** - Build and deploy script
+<details>
+<summary>Click to expand full environment variable list</summary>
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `PORT` | `8080` | HTTP server port |
+| `LLM_PROVIDER` | `ollama` | LLM provider |
+| `OLLAMA_URL` | `http://ollama.ollama.svc.cluster.local:11434` | Ollama endpoint |
+| `OLLAMA_MODEL` | `llama3` | Ollama model |
+| `OPENAI_API_KEY` | - | OpenAI API key |
+| `OPENAI_MODEL` | `gpt-4-turbo-preview` | OpenAI model |
+| `ANTHROPIC_API_KEY` | - | Anthropic API key |
+| `ANTHROPIC_MODEL` | `claude-3-5-sonnet-20241022` | Anthropic model |
+| `GEMINI_API_KEY` | - | Gemini API key |
+| `GEMINI_MODEL` | `gemini-1.5-pro` | Gemini model |
+| `BEDROCK_REGION` | `us-east-1` | AWS region |
+| `BEDROCK_MODEL` | `anthropic.claude-3-5-sonnet-20241022-v2:0` | Bedrock model ARN |
+| `SLACK_WEBHOOK_URL` | - | Slack webhook (basic) |
+| `SLACK_BOT_TOKEN` | - | Slack bot token (advanced) |
+| `SLACK_CHANNEL_ID` | - | Slack channel ID |
+| `SLACK_WORKSPACE_ID` | - | Workspace ID for thread links |
+| `WEBHOOK_AUTH_TOKEN` | - | Webhook auth token |
+| `KB_ENABLED` | `false` | Enable knowledge base |
+| `KB_DATABASE_URL` | - | PostgreSQL URL |
+| `KB_EMBEDDING_PROVIDER` | `openai` | `openai` or `gemini` |
+| `KB_EMBEDDING_API_KEY` | - | Embedding API key |
+| `KB_EMBEDDING_MODEL` | `text-embedding-3-small` | Embedding model |
+| `KB_SIMILARITY_THRESHOLD` | `0.75` | Similarity threshold (0-1) |
+| `KB_MAX_RESULTS` | `5` | Max similar cases |
+
+</details>
 
 ## License
 
@@ -287,4 +190,4 @@ MIT
 
 ## Contributing
 
-Contributions welcome! Please ensure all parameters are extracted from alert labels and avoid hardcoded values.
+Contributions welcome! Ensure parameters are extracted from alert labels.

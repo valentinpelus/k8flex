@@ -3,77 +3,60 @@
 ## Quick Start
 
 ```bash
-# 1. Build and deploy
-make deploy-kind  # or make deploy-minikube
+# 1. Choose LLM Provider
+export LLM_PROVIDER=ollama  # or openai, anthropic, gemini, bedrock
+export OLLAMA_URL=http://ollama.ollama.svc.cluster.local:11434
+export OLLAMA_MODEL=llama3
 
-# 2. Configure Alertmanager (add to your alertmanager config)
+# 2. Build and deploy
+docker build -t k8flex-agent:latest .
+kubectl apply -f k8s/deployment.yaml
+
+# 3. Configure Alertmanager (add to your alertmanager config)
 receivers:
   - name: 'k8flex-ai-debug'
     webhook_configs:
       - url: 'http://k8flex-agent.k8flex.svc.cluster.local:8080/webhook'
 
-# 3. Deploy Ollama
+# 4. Deploy Ollama (if using self-hosted)
 kubectl create namespace ollama
-kubectl apply -f - <<EOF
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: ollama
-  namespace: ollama
-spec:
-  replicas: 1
-  selector:
-    matchLabels:
-      app: ollama
-  template:
-    metadata:
-      labels:
-        app: ollama
-    spec:
-      containers:
-      - name: ollama
-        image: ollama/ollama:latest
-        ports:
-        - containerPort: 11434
----
-apiVersion: v1
-kind: Service
-metadata:
-  name: ollama
-  namespace: ollama
-spec:
-  selector:
-    app: ollama
-  ports:
-  - port: 11434
-EOF
+kubectl apply -f k8s/ollama-deployment.yaml
+kubectl exec -n ollama deployment/ollama -- ollama pull llama3
 
-# 4. Pull model
-kubectl exec -n ollama deployment/ollama -- ollama pull llama2
-
-# 5. (Optional) Setup Slack notifications
-./setup-slack.sh 'https://hooks.slack.com/services/YOUR/WEBHOOK/URL'
+# 5. (Optional) Setup Slack
+export SLACK_BOT_TOKEN=xoxb-...
+export SLACK_CHANNEL_ID=C01234567
 
 # 6. Test
 kubectl apply -f test-alert.json
 ```
 
+### Resource Issues (oom-killed, cpu-throttling)
+- Current resource usage
+- Resource limits
+- QoS class
+- Historical patterns
+
 ## Slack Setup (Optional)
 
+**Basic (Webhook only):**
 ```bash
-# Get Slack webhook URL from https://api.slack.com/apps
-# Then run:
-./setup-slack.sh 'https://hooks.slack.com/services/T00000000/B00000000/XXXXXXXXXXXX'
-
-# Or manually:
-kubectl create secret generic k8flex-secrets \
-  --from-literal=SLACK_WEBHOOK_URL='YOUR_WEBHOOK_URL' \
-  -n k8flex
-
-kubectl rollout restart deployment k8flex-agent -n k8flex
+export SLACK_WEBHOOK_URL=https://hooks.slack.com/services/YOUR/WEBHOOK/URL
 ```
 
-See [SLACK_SETUP.md](SLACK_SETUP.md) for detailed Slack integration guide.
+**Advanced (Bot token for threading, feedback, streaming):**
+```bash
+export SLACK_BOT_TOKEN=xoxb-...
+export SLACK_CHANNEL_ID=C01234567
+export SLACK_WORKSPACE_ID=T01234567  # Optional, for thread links
+```
+
+**Required Bot Scopes:**
+- `chat:write` - Post messages
+- `chat:write.public` - Post to public channels
+- `reactions:read` - Detect feedback reactions
+
+See [SLACK_SETUP.md](SLACK_SETUP.md) for detailed setup.
 
 ## Common Commands
 
@@ -90,44 +73,156 @@ go run main.go
 curl -XPOST http://localhost:8080/webhook -d @test-alert.json
 
 # Rebuild and redeploy
-make clean deploy-kind
+docker build -t k8flex-agent:latest .
+kubectl rollout restart deployment k8flex-agent -n k8flex
 
 # Scale up
 kubectl scale deployment k8flex-agent -n k8flex --replicas=3
 ```
 
-## Alert Label Requirements
+## Monitoring
 
-**Required:**
-- `namespace`: Kubernetes namespace
-
-**Optional but recommended:**
-- `pod`: Pod name
-- `service`: Service name
-- `alertname`: Alert identifier
-- `severity`: Alert severity
-
-## Example Alert
-
-```json
-{
-  "labels": {
-    "alertname": "PodNotReady",
-    "severity": "critical",
-    "namespace": "production",
-    "pod": "api-server-xyz",
-    "service": "api-server"
-  },
-  "annotations": {
-    "summary": "Pod is not ready",
-    "description": "Failed readiness checks"
-  }
-}
+**View feedback statistics in logs:**
+```
+Recorded ✅ feedback for alert 'PodCrashLooping' (category: pod-crash)
+Feedback stats: Total=45, Correct=38 (84%), Incorrect=7 (16%)
 ```
 
-## Configuration
+**Knowledge base stats (if enabled):**
+```
+Found 3 similar cases in knowledge base (top similarity: 87.3%)
+Knowledge Base Stats: total_cases=127, avg_similarity=0.82
+```
 
-Environment variables in ConfigMap:
+## Configuration Examples
+
+### Ollama (Self-hosted)
+```bash
+LLM_PROVIDER=ollama
+OLLAMA_URL=http://ollama.ollama.svc.cluster.local:11434
+OLLAMA_MODEL=llama3
+```
+
+### OpenAI
+```bash
+LLM_PROVIDER=openai
+OPENAI_API_KEY=sk-proj-...
+OPENAI_MODEL=gpt-4-turbo-preview
+```
+
+### Anthropic Claude
+```bash
+LLM_PROVIDER=anthropic
+ANTHROPIC_API_KEY=sk-ant-...
+ANTHROPIC_MODEL=claude-3-5-sonnet-20241022
+```
+
+### Google Gemini
+```bash
+LLM_PROVIDER=gemini
+GEMINI_API_KEY=AIza...
+GEMINI_MODEL=gemini-1.5-pro
+```
+
+### Knowledge Base
+```bash
+KB_ENABLED=true
+KB_DATABASE_URL=postgresql://user:pass@host:5432/k8flex
+KB_EMBEDDING_PROVIDER=openai
+KB_EMBEDDING_API_KEY=sk-...
+KB_SIMILARITY_THRESHOLD=0.75
+KB_MAX_RESULTS=5
+```
+
+## Troubleshooting
+
+Your Prometheus alerts must include these labels:
+
+**Required:**
+- `namespace` - Kubernetes namespace
+
+**Optional (for targeted debugging):**
+- `pod` - Pod name
+- `service` - Service name
+- `alertname` - Alert identifier
+- `severity` - Alert severity level
+
+**Example Alert:**
+```yaml
+- alert: PodNotReady
+  expr: kube_pod_status_phase{phase!="Running"} == 1
+  labels:
+    severity: warning
+    namespace: "{{ $labels.namespace }}"
+    pod: "{{ $labels.pod }}"
+  annotations:
+    summary: "Pod {{ $labels.pod }} is not ready"
+```
+
+## What K8flex Debugs
+
+K8flex automatically categorizes alerts and gathers relevant information:
+
+### Pod Issues (pod-crash, pod-restart, pod-pending)
+- Last 100 lines of pod logs (all containers)
+- Pod status and conditions
+- Container states and restart counts
+- Recent namespace events
+- Resource requests/limits
+
+### Service Issues (service-down, endpoint-missing)
+- Service configuration
+- Endpoint status (ready/not-ready)
+- Pod IPs and connectivity
+- Network policies
+
+### Node Issues (node-not-ready, disk-pressure)
+- Node status and conditions
+- Available resources
+- Node events
+- Pods on the node
+
+### Network Issues (network-policy, dns-issues)
+- Network policies (ingress/egress)
+- DNS configuration
+- Service endpoints
+
+### Resource Issues (oom-killed, cpu-throttling)
+- Current resource usage
+- Resource limits
+- QoS class
+- Historical patterns
+
+## Troubleshooting
+
+**No analysis generated:**
+- Check LLM provider is accessible
+- Verify API keys are correct
+- Check logs for errors
+
+**Slack not working:**
+- Verify webhook URL or bot token
+- Check bot scopes (chat:write, reactions:read)
+- Test with `curl` to Slack API
+
+**Knowledge base not finding similar cases:**
+- Check PostgreSQL is running
+- Verify embedding provider API key
+- Adjust similarity threshold (lower = more results)
+
+**Feedback not detected:**
+- Ensure bot has `reactions:read` scope
+- Check Slack workspace ID is set
+- Verify bot is in the channel
+
+## Quick Links
+
+- **[ARCHITECTURE.md](ARCHITECTURE.md)** - Complete system architecture and workflow
+- **[LLM_PROVIDERS.md](LLM_PROVIDERS.md)** - All LLM provider configurations
+- **[FEEDBACK.md](FEEDBACK.md)** - Feedback system details
+- **[KNOWLEDGE_BASE.md](KNOWLEDGE_BASE.md)** - Vector database setup
+- **[SLACK_SETUP.md](SLACK_SETUP.md)** - Detailed Slack configuration
+- **[WEBHOOK_SECURITY.md](WEBHOOK_SECURITY.md)** - Webhook authentication
 
 ```yaml
 OLLAMA_URL: "http://ollama.ollama.svc.cluster.local:11434"
