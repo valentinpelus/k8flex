@@ -149,7 +149,7 @@ func (c *Client) sendAnalysisWithBot(_ types.Alert, analysis string, threadTS st
 				Type: "section",
 				Text: &types.SlackTextObject{
 					Type: "mrkdwn",
-					Text: truncateForSlack(analysis, 2900),
+					Text: truncateForSlack(ConvertMarkdownToSlack(analysis), 2900),
 				},
 			},
 		},
@@ -346,6 +346,15 @@ func truncateForSlack(text string, maxLen int) string {
 	return text[:maxLen] + "\n... (truncated)"
 }
 
+// ConvertMarkdownToSlack converts standard Markdown to Slack's mrkdwn format
+func ConvertMarkdownToSlack(text string) string {
+	// Convert **bold** to *bold*
+	text = strings.ReplaceAll(text, "**", "*")
+	// Convert numbered lists with bold headers (e.g., "1. **Action:**" to "1. *Action:*")
+	// Already handled by the above replacement
+	return text
+}
+
 // UpdateMessage updates an existing Slack message (requires Bot token)
 func (c *Client) UpdateMessage(messageTS, newText string) error {
 	if !c.HasBotToken() {
@@ -355,7 +364,7 @@ func (c *Client) UpdateMessage(messageTS, newText string) error {
 	updatePayload := map[string]interface{}{
 		"channel": c.channelID,
 		"ts":      messageTS,
-		"text":    truncateForSlack(newText, 3000),
+		"text":    truncateForSlack(ConvertMarkdownToSlack(newText), 3000),
 	}
 
 	jsonData, err := json.Marshal(updatePayload)

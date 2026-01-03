@@ -148,14 +148,34 @@ func (c *Client) AnalyzeDebugInfoStream(debugInfo string, pastFeedback []types.F
 
 	prompt := fmt.Sprintf(`K8s SRE expert: Analyze this incident. Debug info is pre-filtered for this alert only.
 %s
-Provide:
-1. Root Cause: Most likely cause
-2. Key Evidence: Specific logs/errors/metrics
-3. Impact: What's affected
-4. Actions: 2-3 steps to fix
-5. Prevention: 1-2 measures
+ANALYSIS RULES:
+1. Base ALL conclusions on the Debug Info below - cite specific evidence
+2. You MAY make logical inferences from the provided metrics and logs
+3. Cross-reference patterns with past incidents (see feedback above) if similar
+4. Quote actual log lines, errors, or metric values when citing evidence
+5. If data is incomplete, state what's missing instead of inventing details
+6. Use your K8s expertise to interpret the data, but DO NOT fabricate scenarios
+7. Also consider severity and alert status in your impact assessment
+8. Provide clear, actionable remediation steps based on evidence
+9. Suggest prevention measures to avoid recurrence
+10. Be concise and structured in your response
+11. Keep in mind that the alert name and description may not cover all aspects of the issue
+12. If the alert name is misleading, rely on the debug info for accurate analysis but in the same moment try to align with the alert context
 
-Be concise. Only use provided data.%s
+Provide analysis using this format (use *text* for bold, not **text**):
+
+*Root Cause:* Most likely cause based on evidence (cite specific metrics/logs)
+*Key Evidence:* Quote ACTUAL lines from debug info
+*Impact:* What's affected (based on provided status/metrics)
+*Actions:*
+• Step 1 (specific to the evidence found)
+• Step 2 (actionable based on data)
+• Step 3 (resolves identified issue)
+*Prevention:*
+• Measure 1 (prevents recurrence of this root cause)
+• Measure 2 (improves monitoring/detection)
+
+Use bullet points (•). Use *bold* for headers. Ground everything in provided data.%s
 
 Debug Info:
 %s
@@ -163,7 +183,7 @@ Debug Info:
 Analysis:`, feedbackContext,
 		func() string {
 			if len(pastFeedback) > 0 {
-				return " Learn from past feedback - avoid repeating ❌ mistakes."
+				return " Apply lessons from past feedback - use similar patterns if applicable."
 			}
 			return ""
 		}(), debugInfo)
