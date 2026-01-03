@@ -83,7 +83,10 @@ config:
 slack:
   # Use Bot token for threading support (recommended)
   botToken: ""  # Replace with your actual bot token
-  channelId: ""   
+  channelId: ""
+  # Workspace ID for building Slack links (e.g., "T01234567")
+  # Find it in your Slack URL: https://YOUR-WORKSPACE.slack.com
+  workspaceId: ""
   
   # OR use webhook URL (no threading support)
   webhookUrl: ""
@@ -94,6 +97,14 @@ webhook:
   # Leave empty to auto-generate a secure random token (recommended)
   # Or provide your own: openssl rand -hex 32
   authToken: ""
+
+# Persistence for feedback storage
+persistence:
+  enabled: true
+  # storageClass: "-"  # Use default storage class
+  accessMode: ReadWriteOnce
+  size: 1Gi
+  # existingClaim: ""  # Use existing PVC if specified
 
 # Node selector for pod assignment
 nodeSelector: {}

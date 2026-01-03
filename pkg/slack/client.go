@@ -14,10 +14,11 @@ import (
 
 // Client wraps the Slack API client
 type Client struct {
-	webhookURL string
-	botToken   string
-	channelID  string
-	client     *http.Client
+	webhookURL  string
+	botToken    string
+	channelID   string
+	workspaceID string // Added for building Slack links
+	client      *http.Client
 }
 
 // NewClient creates a new Slack client
@@ -53,11 +54,23 @@ func (c *Client) SendAlert(alert types.Alert) (string, error) {
 // SendAnalysis sends the analysis to Slack as a threaded reply
 func (c *Client) SendAnalysis(alert types.Alert, analysis string, threadTS string) error {
 	if c.HasBotToken() && threadTS != "" {
-		return c.sendAnalysisWithBot(alert, analysis, threadTS)
+		_, err := c.sendAnalysisWithBot(alert, analysis, threadTS)
+		return err
 	} else if c.webhookURL != "" {
 		return c.sendAnalysisWithWebhook(alert, analysis, threadTS)
 	}
 	return nil
+}
+
+// SendAnalysisInThread sends analysis in a thread and returns the message timestamp for updates
+func (c *Client) SendAnalysisInThread(alert types.Alert, analysis string, threadTS string) (string, error) {
+	if c.HasBotToken() && threadTS != "" {
+		return c.sendAnalysisWithBot(alert, analysis, threadTS)
+	} else if c.webhookURL != "" {
+		err := c.sendAnalysisWithWebhook(alert, analysis, threadTS)
+		return "", err
+	}
+	return "", nil
 }
 
 // sendAlertWithBot sends an alert using the Slack Bot token API
@@ -116,8 +129,8 @@ func (c *Client) sendAlertWithWebhook(alert types.Alert) (string, error) {
 	return slackResp.TS, nil
 }
 
-// sendAnalysisWithBot sends analysis using the Slack Bot token API
-func (c *Client) sendAnalysisWithBot(_ types.Alert, analysis string, threadTS string) error {
+// sendAnalysisWithBot sends analysis using the Slack Bot token API and returns message timestamp
+func (c *Client) sendAnalysisWithBot(_ types.Alert, analysis string, threadTS string) (string, error) {
 	message := types.SlackMessage{
 		Channel:     c.channelID,
 		ThreadTS:    threadTS,
@@ -127,7 +140,7 @@ func (c *Client) sendAnalysisWithBot(_ types.Alert, analysis string, threadTS st
 				Type: "section",
 				Text: &types.SlackTextObject{
 					Type: "mrkdwn",
-					Text: "*🔍 AI Debug Analysis Complete*",
+					Text: "*🔍 AI Debug Analysis*",
 				},
 			},
 			{
@@ -137,19 +150,13 @@ func (c *Client) sendAnalysisWithBot(_ types.Alert, analysis string, threadTS st
 				Type: "section",
 				Text: &types.SlackTextObject{
 					Type: "mrkdwn",
-					Text: fmt.Sprintf("```\n%s\n```", truncateForSlack(analysis, 2900)),
+					Text: truncateForSlack(ConvertMarkdownToSlack(analysis), 2900),
 				},
 			},
 		},
 	}
 
-	_, err := c.postMessage(message)
-	if err != nil {
-		return err
-	}
-
-	log.Printf("Analysis sent to Slack thread: %s", threadTS)
-	return nil
+	return c.postMessage(message)
 }
 
 // sendAnalysisWithWebhook sends analysis using Slack incoming webhook
@@ -338,4 +345,214 @@ func truncateForSlack(text string, maxLen int) string {
 		return text
 	}
 	return text[:maxLen] + "\n... (truncated)"
+}
+
+// ConvertMarkdownToSlack converts standard Markdown to Slack's mrkdwn format
+func ConvertMarkdownToSlack(text string) string {
+	// Convert **bold** to *bold*
+	text = strings.ReplaceAll(text, "**", "*")
+	// Convert numbered lists with bold headers (e.g., "1. **Action:**" to "1. *Action:*")
+	// Already handled by the above replacement
+	return text
+}
+
+// UpdateMessage updates an existing Slack message (requires Bot token)
+func (c *Client) UpdateMessage(messageTS, newText string) error {
+	if !c.HasBotToken() {
+		return fmt.Errorf("Bot token required for message updates")
+	}
+
+	updatePayload := map[string]interface{}{
+		"channel": c.channelID,
+		"ts":      messageTS,
+		"text":    truncateForSlack(ConvertMarkdownToSlack(newText), 3000),
+	}
+
+	jsonData, err := json.Marshal(updatePayload)
+	if err != nil {
+		return fmt.Errorf("failed to marshal update payload: %w", err)
+	}
+
+	req, err := http.NewRequest("POST", "https://slack.com/api/chat.update", bytes.NewBuffer(jsonData))
+	if err != nil {
+		return fmt.Errorf("failed to create request: %w", err)
+	}
+
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+c.botToken)
+
+	resp, err := c.client.Do(req)
+	if err != nil {
+		return fmt.Errorf("failed to update message: %w", err)
+	}
+	defer resp.Body.Close()
+
+	body, _ := io.ReadAll(resp.Body)
+	var slackResp types.SlackResponse
+	if err := json.Unmarshal(body, &slackResp); err != nil {
+		return fmt.Errorf("failed to parse response: %w", err)
+	}
+
+	if !slackResp.OK {
+		return fmt.Errorf("Slack error: %s", slackResp.Error)
+	}
+
+	return nil
+}
+
+// GetMessageReactions retrieves reactions on a specific message
+func (c *Client) GetMessageReactions(messageTS string) ([]string, error) {
+	if !c.HasBotToken() {
+		return nil, fmt.Errorf("Bot token required for getting reactions")
+	}
+
+	url := fmt.Sprintf("https://slack.com/api/reactions.get?channel=%s&timestamp=%s", c.channelID, messageTS)
+
+	req, err := http.NewRequest("GET", url, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request: %w", err)
+	}
+
+	req.Header.Set("Authorization", "Bearer "+c.botToken)
+
+	resp, err := c.client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get reactions: %w", err)
+	}
+	defer resp.Body.Close()
+
+	body, _ := io.ReadAll(resp.Body)
+
+	var result struct {
+		OK      bool   `json:"ok"`
+		Error   string `json:"error,omitempty"`
+		Message struct {
+			Reactions []struct {
+				Name string `json:"name"`
+			} `json:"reactions"`
+		} `json:"message"`
+	}
+
+	if err := json.Unmarshal(body, &result); err != nil {
+		return nil, fmt.Errorf("failed to parse response: %w", err)
+	}
+
+	if !result.OK {
+		// If error is "message_not_found" or "no_reaction", return empty list
+		if result.Error == "message_not_found" || result.Error == "no_reaction" {
+			return []string{}, nil
+		}
+		// Special handling for not_in_channel error
+		if result.Error == "not_in_channel" {
+			return nil, fmt.Errorf("bot not in channel - invite bot to channel with: /invite @bot-name (channel: %s)", c.channelID)
+		}
+		return nil, fmt.Errorf("Slack error: %s (channel: %s, ts: %s)", result.Error, c.channelID, messageTS)
+	}
+
+	reactions := make([]string, 0, len(result.Message.Reactions))
+	for _, r := range result.Message.Reactions {
+		reactions = append(reactions, r.Name)
+	}
+
+	return reactions, nil
+}
+
+// ReplyToThread sends a message as a reply in a thread
+func (c *Client) ReplyToThread(threadTS, text string) error {
+	if !c.HasBotToken() {
+		return fmt.Errorf("Bot token required for thread replies")
+	}
+
+	message := types.SlackMessage{
+		Channel:  c.channelID,
+		ThreadTS: threadTS,
+		Text:     text,
+	}
+
+	_, err := c.postMessage(message)
+	return err
+}
+
+// GetChannelID returns the configured channel ID
+func (c *Client) GetChannelID() string {
+	return c.channelID
+}
+
+// GetWorkspaceID returns the workspace ID (extracted from team info or set manually)
+func (c *Client) GetWorkspaceID() string {
+	// If not set, try to extract from first API call or return empty
+	// For now, this needs to be configured via environment variable
+	return c.workspaceID
+}
+
+// SetWorkspaceID sets the workspace ID for building Slack links
+func (c *Client) SetWorkspaceID(workspaceID string) {
+	c.workspaceID = workspaceID
+}
+
+// ValidateScopes checks if the bot token has required scopes for feedback detection
+func (c *Client) ValidateScopes() error {
+	if !c.HasBotToken() {
+		return fmt.Errorf("bot token not configured")
+	}
+
+	// Call auth.test to verify token and get bot info
+	req, err := http.NewRequest("GET", "https://slack.com/api/auth.test", nil)
+	if err != nil {
+		return fmt.Errorf("failed to create request: %w", err)
+	}
+
+	req.Header.Set("Authorization", "Bearer "+c.botToken)
+
+	resp, err := c.client.Do(req)
+	if err != nil {
+		return fmt.Errorf("failed to validate token: %w", err)
+	}
+	defer resp.Body.Close()
+
+	body, _ := io.ReadAll(resp.Body)
+
+	var result struct {
+		OK    bool   `json:"ok"`
+		Error string `json:"error,omitempty"`
+	}
+
+	if err := json.Unmarshal(body, &result); err != nil {
+		return fmt.Errorf("failed to parse response: %w", err)
+	}
+
+	if !result.OK {
+		return fmt.Errorf("token validation failed: %s", result.Error)
+	}
+
+	// Try a test call to reactions.get to check if scope exists
+	// We use a fake timestamp, expecting either success or message_not_found (which means scope is OK)
+	testURL := fmt.Sprintf("https://slack.com/api/reactions.get?channel=%s&timestamp=0000000000.000000", c.channelID)
+	req, _ = http.NewRequest("GET", testURL, nil)
+	req.Header.Set("Authorization", "Bearer "+c.botToken)
+
+	resp, err = c.client.Do(req)
+	if err != nil {
+		return fmt.Errorf("failed to check scopes: %w", err)
+	}
+	defer resp.Body.Close()
+
+	body, _ = io.ReadAll(resp.Body)
+
+	var scopeResult struct {
+		OK    bool   `json:"ok"`
+		Error string `json:"error,omitempty"`
+	}
+
+	if err := json.Unmarshal(body, &scopeResult); err != nil {
+		return fmt.Errorf("failed to parse scope check: %w", err)
+	}
+
+	// If error is "missing_scope", the bot doesn't have reactions:read
+	if scopeResult.Error == "missing_scope" {
+		return fmt.Errorf("missing required scope 'reactions:read' - add it at https://api.slack.com/apps")
+	}
+
+	// Other errors like "message_not_found" are OK - it means the scope exists
+	return nil
 }

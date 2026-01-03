@@ -23,8 +23,8 @@ func New(k8sClient *kubernetes.Client) *Debugger {
 	}
 }
 
-// GatherDebugInfo collects comprehensive debug information for an alert
-func (d *Debugger) GatherDebugInfo(ctx context.Context, alert types.Alert) string {
+// GatherDebugInfo collects contextually relevant debug information based on alert category
+func (d *Debugger) GatherDebugInfo(ctx context.Context, alert types.Alert, category string) string {
 	namespace := alert.Labels["namespace"]
 	podName := alert.Labels["pod"]
 	serviceName := alert.Labels["service"]
@@ -32,14 +32,67 @@ func (d *Debugger) GatherDebugInfo(ctx context.Context, alert types.Alert) strin
 	var debugInfo strings.Builder
 
 	d.writeHeader(&debugInfo, alert, namespace)
-	d.gatherPodLogs(ctx, &debugInfo, namespace, podName)
-	d.gatherPodDetails(ctx, &debugInfo, namespace, podName)
+
+	// Always gather namespace events - they provide crucial context for any alert
 	d.gatherNamespaceEvents(ctx, &debugInfo, namespace)
-	d.gatherServiceInfo(ctx, &debugInfo, namespace, serviceName)
-	d.gatherNetworkInfo(ctx, &debugInfo, namespace, podName)
-	d.gatherResourceInfo(ctx, &debugInfo, namespace, podName)
-	d.gatherNodeResources(ctx, &debugInfo, namespace, podName)
-	d.gatherNodeStatus(ctx, &debugInfo, namespace, podName)
+
+	// Gather debug info based on the category determined by Ollama
+	log.Printf("Gathering debug info for category: %s", category)
+
+	switch category {
+	case "pod-crash", "pod-restart":
+		// Pod issues: logs, pod details, resource constraints
+		d.gatherPodLogs(ctx, &debugInfo, namespace, podName)
+		d.gatherPodDetails(ctx, &debugInfo, namespace, podName)
+		d.gatherResourceInfo(ctx, &debugInfo, namespace, podName)
+
+	case "memory", "cpu", "disk":
+		// Resource issues: pod resources, node capacity
+		d.gatherPodDetails(ctx, &debugInfo, namespace, podName)
+		d.gatherResourceInfo(ctx, &debugInfo, namespace, podName)
+		d.gatherNodeResources(ctx, &debugInfo, namespace, podName)
+
+	case "network":
+		// Network issues: service info, network policies, pod network
+		d.gatherServiceInfo(ctx, &debugInfo, namespace, serviceName)
+		d.gatherNetworkInfo(ctx, &debugInfo, namespace, podName)
+		if podName != "" {
+			d.gatherPodDetails(ctx, &debugInfo, namespace, podName)
+		}
+
+	case "service":
+		// Service issues: service info, endpoints
+		d.gatherServiceInfo(ctx, &debugInfo, namespace, serviceName)
+		if podName != "" {
+			d.gatherPodDetails(ctx, &debugInfo, namespace, podName)
+		}
+
+	case "hpa", "deployment":
+		// HPA/Deployment issues: resource metrics, pod details (not node capacity)
+		d.gatherResourceInfo(ctx, &debugInfo, namespace, podName)
+		if podName != "" {
+			d.gatherPodDetails(ctx, &debugInfo, namespace, podName)
+		}
+
+	case "node":
+		// Node issues: node status, node resources
+		if podName != "" {
+			d.gatherPodDetails(ctx, &debugInfo, namespace, podName)
+			d.gatherNodeStatus(ctx, &debugInfo, namespace, podName)
+			d.gatherNodeResources(ctx, &debugInfo, namespace, podName)
+		}
+
+	default:
+		// Unknown alert type: gather pod and service basics
+		log.Printf("Unknown category '%s', gathering basic info", category)
+		if podName != "" {
+			d.gatherPodLogs(ctx, &debugInfo, namespace, podName)
+			d.gatherPodDetails(ctx, &debugInfo, namespace, podName)
+		}
+		if serviceName != "" {
+			d.gatherServiceInfo(ctx, &debugInfo, namespace, serviceName)
+		}
+	}
 
 	return debugInfo.String()
 }
