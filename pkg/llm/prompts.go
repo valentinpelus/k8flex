@@ -2,33 +2,15 @@ package llm
 
 import (
 	"fmt"
+	"os"
 
 	"github.com/valentinpelus/k8flex/pkg/types"
 )
 
-// BuildAnalysisPrompt creates the analysis prompt shared across all providers
-func BuildAnalysisPrompt(debugInfo string, pastFeedback []types.Feedback) string {
-	// Build compact feedback context if available
-	var feedbackContext string
-	if len(pastFeedback) > 0 {
-		feedbackContext = "\n=== PAST FEEDBACK ===\n"
-		for i, fb := range pastFeedback {
-			status := "✅ CORRECT"
-			if !fb.IsCorrect {
-				status = "❌ WRONG"
-			}
-			// Truncate analysis to first 200 chars
-			analysis := fb.Analysis
-			if len(analysis) > 200 {
-				analysis = analysis[:200] + "..."
-			}
-			feedbackContext += fmt.Sprintf("%d. %s (%s): %s - %s\n", i+1, fb.AlertName, fb.Category, status, analysis)
-		}
-		feedbackContext += "\n"
-	}
-
-	prompt := fmt.Sprintf(`K8s SRE expert: Analyze this incident. Debug info is pre-filtered for this alert only.
-%s
+// DefaultAnalysisPromptTemplate is the default prompt template
+// Variables available: {FEEDBACK_CONTEXT}, {FEEDBACK_INSTRUCTION}, {DEBUG_INFO}
+const DefaultAnalysisPromptTemplate = `K8s SRE expert: Analyze this incident. Debug info is pre-filtered for this alert only.
+{FEEDBACK_CONTEXT}
 ANALYSIS RULES:
 1. Base ALL conclusions on the Debug Info below - cite specific evidence
 2. You MAY make logical inferences from the provided metrics and logs
@@ -68,18 +50,80 @@ Provide analysis using this format (use *text* for bold, not **text**):
 • Measure 1 (prevents recurrence of this root cause)
 • Measure 2 (improves monitoring/detection)
 
-Use bullet points (•). Use *bold* for headers. Ground everything in provided data.%s
+Use bullet points (•). Use *bold* for headers. Ground everything in provided data.{FEEDBACK_INSTRUCTION}
 
 Debug Info:
-%s
+{DEBUG_INFO}
 
-Analysis:`, feedbackContext,
-		func() string {
-			if len(pastFeedback) > 0 {
-				return " Apply lessons from past feedback - use similar patterns if applicable."
+Analysis:`
+
+// GetAnalysisPromptTemplate returns the prompt template from env var or default
+func GetAnalysisPromptTemplate() string {
+	if customPrompt := os.Getenv("ANALYSIS_PROMPT_TEMPLATE"); customPrompt != "" {
+		return customPrompt
+	}
+	return DefaultAnalysisPromptTemplate
+}
+
+// BuildAnalysisPrompt creates the analysis prompt shared across all providers
+func BuildAnalysisPrompt(debugInfo string, pastFeedback []types.Feedback) string {
+	// Build compact feedback context if available
+	var feedbackContext string
+	if len(pastFeedback) > 0 {
+		feedbackContext = "\n=== PAST FEEDBACK ===\n"
+		for i, fb := range pastFeedback {
+			status := "✅ CORRECT"
+			if !fb.IsCorrect {
+				status = "❌ WRONG"
 			}
-			return ""
-		}(), debugInfo)
+			// Truncate analysis to first 200 chars
+			analysis := fb.Analysis
+			if len(analysis) > 200 {
+				analysis = analysis[:200] + "..."
+			}
+			feedbackContext += fmt.Sprintf("%d. %s (%s): %s - %s\n", i+1, fb.AlertName, fb.Category, status, analysis)
+		}
+		feedbackContext += "\n"
+	}
+
+	feedbackInstruction := ""
+	if len(pastFeedback) > 0 {
+		feedbackInstruction = " Apply lessons from past feedback - use similar patterns if applicable."
+	}
+
+	// Get prompt template (custom or default)
+	template := GetAnalysisPromptTemplate()
+
+	// Replace placeholders
+	prompt := template
+	prompt = replaceAll(prompt, "{FEEDBACK_CONTEXT}", feedbackContext)
+	prompt = replaceAll(prompt, "{FEEDBACK_INSTRUCTION}", feedbackInstruction)
+	prompt = replaceAll(prompt, "{DEBUG_INFO}", debugInfo)
 
 	return prompt
+}
+
+// replaceAll is a simple string replacement helper
+func replaceAll(s, old, new string) string {
+	result := ""
+	for {
+		idx := indexOf(s, old)
+		if idx == -1 {
+			result += s
+			break
+		}
+		result += s[:idx] + new
+		s = s[idx+len(old):]
+	}
+	return result
+}
+
+// indexOf finds the first occurrence of substr in s
+func indexOf(s, substr string) int {
+	for i := 0; i <= len(s)-len(substr); i++ {
+		if s[i:i+len(substr)] == substr {
+			return i
+		}
+	}
+	return -1
 }

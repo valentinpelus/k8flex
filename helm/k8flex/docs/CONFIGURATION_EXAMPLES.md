@@ -585,6 +585,179 @@ spec:
       selfHeal: true
 ```
 
+## Custom Analysis Prompts
+
+### Security-Focused Prompt
+
+```yaml
+# security-prompt.yaml
+config:
+  llm:
+    provider: "anthropic"
+  anthropic:
+    model: "claude-3-5-sonnet-20241022"
+  
+  analysisPrompt: |
+    SECURITY INCIDENT ANALYSIS - Kubernetes Cluster
+    {FEEDBACK_CONTEXT}
+    
+    Analysis Framework:
+    1. Identify security vulnerabilities and attack vectors
+    2. Assess compliance and regulatory impact
+    3. Determine data exposure risk
+    4. Check for privilege escalation
+    5. Review network security implications
+    
+    Debug Information:
+    {DEBUG_INFO}
+    {FEEDBACK_INSTRUCTION}
+    
+    Required Output Format:
+    *Security Risk:* [CRITICAL/HIGH/MEDIUM/LOW]
+    *Attack Vector:* [Description with evidence]
+    *Data Exposure:* [What data is at risk]
+    *Compliance Impact:* [SOC2/HIPAA/PCI-DSS implications]
+    *Immediate Actions:* 
+    • [Security containment step 1]
+    • [Security containment step 2]
+    *Security Hardening:*
+    • [Prevention measure 1]
+    • [Prevention measure 2]
+
+adapters:
+  enabled: "alertmanager,datadog"
+
+slack:
+  botToken: "xoxb-YOUR-TOKEN"
+  channelId: "C-SECURITY-OPS"
+```
+
+### Brief & Actionable Prompt
+
+```yaml
+# brief-prompt.yaml
+config:
+  llm:
+    provider: "openai"
+  openai:
+    model: "gpt-4-turbo-preview"
+  
+  analysisPrompt: |
+    Quick Incident Analysis
+    {FEEDBACK_CONTEXT}
+    Debug: {DEBUG_INFO}
+    {FEEDBACK_INSTRUCTION}
+    
+    Format (be concise):
+    *Problem:* [1-2 sentences]
+    *Fix:* [3 bullet points max]
+    *Prevention:* [1 recommendation]
+
+adapters:
+  enabled: "grafana"
+```
+
+### Custom Domain Expert Prompt
+
+```yaml
+# fintech-prompt.yaml
+config:
+  llm:
+    provider: "anthropic"
+  anthropic:
+    model: "claude-3-5-sonnet-20241022"
+  
+  analysisPrompt: |
+    Financial Services Kubernetes Incident Analysis
+    {FEEDBACK_CONTEXT}
+    
+    Context: This is a payment processing platform with strict SLA requirements.
+    
+    Critical Evaluation Points:
+    1. Transaction processing impact (quote actual error rates from metrics)
+    2. Database consistency implications
+    3. Regulatory compliance (PCI-DSS, SOX)
+    4. Customer-facing service availability
+    5. Financial data integrity
+    
+    Debug Information:
+    {DEBUG_INFO}
+    {FEEDBACK_INSTRUCTION}
+    
+    Response Template:
+    *Business Impact:* [Revenue/SLA/Customer impact with numbers]
+    *Root Cause:* [Technical cause with evidence]
+    *Transaction Safety:* [Are in-flight transactions safe?]
+    *Recovery Steps:*
+    • [Step 1 - most critical]
+    • [Step 2]
+    • [Step 3]
+    *Compliance Report:* [What to report to compliance team]
+    *Prevention:* [Technical + process improvements]
+    
+    Tone: Professional, precise, cite specific metrics.
+
+adapters:
+  enabled: "pagerduty,datadog,opsgenie"
+
+slack:
+  botToken: "xoxb-YOUR-TOKEN"
+  channelId: "C-PAYMENTS-OPS"
+  workspaceId: "T01234567"
+
+knowledgeBase:
+  enabled: true
+  embeddingProvider: "openai"
+```
+
+### Multi-Language Prompt
+
+```yaml
+# french-prompt.yaml
+config:
+  llm:
+    provider: "gemini"
+  gemini:
+    model: "gemini-1.5-pro"
+  
+  analysisPrompt: |
+    Analyse d'Incident Kubernetes
+    {FEEDBACK_CONTEXT}
+    
+    Instructions:
+    1. Identifier la cause racine avec des preuves
+    2. Évaluer l'impact métier
+    3. Fournir des étapes de remédiation
+    4. Suggérer des mesures préventives
+    
+    Informations de debug:
+    {DEBUG_INFO}
+    {FEEDBACK_INSTRUCTION}
+    
+    Format de réponse:
+    *Cause Racine:* ...
+    *Impact:* ...
+    *Actions Correctives:* ...
+    *Prévention:* ...
+
+adapters:
+  enabled: "alertmanager"
+```
+
+### Minimal Prompt (Override Default)
+
+```yaml
+# minimal-prompt.yaml
+config:
+  analysisPrompt: |
+    {DEBUG_INFO}
+    {FEEDBACK_CONTEXT}
+    {FEEDBACK_INSTRUCTION}
+    Analyze and fix.
+```
+
+**Note:** The minimal prompt gives the LLM maximum freedom but may produce inconsistent output. Use the default prompt or customize it with structure for best results.
+
 ## Troubleshooting
 
 ### View Current Configuration

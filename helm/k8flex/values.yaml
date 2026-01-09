@@ -91,6 +91,22 @@ config:
     # Provider: ollama, openai, anthropic (claude), gemini, bedrock (aws)
     provider: "ollama"
   
+  # Analysis Prompt Configuration
+  # Customize the AI analysis prompt template (optional)
+  # Available variables: {FEEDBACK_CONTEXT}, {FEEDBACK_INSTRUCTION}, {DEBUG_INFO}
+  # If not set, the default prompt will be used
+  # Example:
+  # analysisPrompt: |
+  #   You are a Kubernetes expert. Analyze this incident.
+  #   {FEEDBACK_CONTEXT}
+  #   ANALYSIS RULES:
+  #
+  #   Debug Information:
+  #   {DEBUG_INFO}
+  #   {FEEDBACK_INSTRUCTION}
+  #   Provide your analysis in markdown format.
+  analysisPrompt: ""
+  
   # Ollama settings (if provider=ollama)
   ollama:
     url: "http://ollama.ollama.svc.cluster.local:11434"

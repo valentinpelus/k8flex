@@ -90,6 +90,7 @@ The following table lists the configurable parameters of the K8flex chart and th
 | Parameter | Description | Default |
 |-----------|-------------|---------|
 | `config.llm.provider` | LLM provider (ollama, openai, anthropic, gemini, bedrock) | `ollama` |
+| `config.analysisPrompt` | Custom AI analysis prompt template (optional) | `""` (uses default) |
 | `config.ollama.url` | Ollama API URL | `http://ollama.ollama.svc.cluster.local:11434` |
 | `config.ollama.model` | Ollama model to use | `llama3` |
 | `config.openai.apiKey` | OpenAI API key (set in secrets.yaml) | `""` |
@@ -288,6 +289,96 @@ helm upgrade k8flex ./helm/k8flex \
   --set config.llm.provider="openai" \
   --set config.openai.apiKey="sk-..."
 ```
+
+## Custom Analysis Prompts
+
+You can customize the AI analysis prompt to tailor the behavior to your specific needs. The prompt supports three variables:
+
+- `{FEEDBACK_CONTEXT}` - Automatically injected feedback from past incidents
+- `{DEBUG_INFO}` - The collected Kubernetes debug information
+- `{FEEDBACK_INSTRUCTION}` - Additional instruction when feedback is available
+
+### Example: Custom Prompt via values.yaml
+
+```yaml
+config:
+  analysisPrompt: |
+    You are a Senior Kubernetes SRE. Analyze this production incident.
+    {FEEDBACK_CONTEXT}
+    
+    Critical Analysis Requirements:
+    1. Identify the root cause with evidence
+    2. Assess business impact
+    3. Provide immediate remediation steps
+    4. Suggest preventive measures
+    
+    Debug Information:
+    {DEBUG_INFO}
+    {FEEDBACK_INSTRUCTION}
+    
+    Respond in this format:
+    *Root Cause:* ...
+    *Impact:* ...
+    *Remediation:* ...
+    *Prevention:* ...
+```
+
+### Example: Short & Focused Prompt
+
+```yaml
+config:
+  analysisPrompt: |
+    Analyze this Kubernetes issue. Be brief and actionable.
+    {FEEDBACK_CONTEXT}
+    Data: {DEBUG_INFO}
+    {FEEDBACK_INSTRUCTION}
+    
+    Format:
+    *Problem:* ...
+    *Fix:* ...
+```
+
+### Example: Security-Focused Prompt
+
+```yaml
+config:
+  analysisPrompt: |
+    Security Incident Analysis - Kubernetes Cluster
+    {FEEDBACK_CONTEXT}
+    
+    Analyze for:
+    - Security implications
+    - Compliance impact  
+    - Data exposure risks
+    - Attack vectors
+    
+    Debug Data: {DEBUG_INFO}
+    {FEEDBACK_INSTRUCTION}
+    
+    Response:
+    *Security Assessment:* ...
+    *Risk Level:* ...
+    *Immediate Actions:* ...
+    *Security Hardening:* ...
+```
+
+### Deploy with Custom Prompt
+
+```bash
+# Using values file
+helm install k8flex ./helm/k8flex \
+  --namespace k8flex \
+  --create-namespace \
+  -f custom-prompt-values.yaml
+
+# Using --set (for short prompts)
+helm install k8flex ./helm/k8flex \
+  --namespace k8flex \
+  --create-namespace \
+  --set 'config.analysisPrompt=Brief analysis: {DEBUG_INFO}'
+```
+
+**Note:** All LLM providers (Ollama, OpenAI, Claude, Gemini, Bedrock) share the same prompt template. The custom prompt applies across all providers consistently.
 
 ## Uninstallation
 
