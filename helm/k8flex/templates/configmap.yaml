@@ -45,4 +45,14 @@ data:
   KB_ENABLED: "false"
   {{- end }}
   
+  # Alerting System Adapters
+  {{- if .Values.adapters.enabled }}
+  ENABLED_ADAPTERS: {{ .Values.adapters.enabled | quote }}
+  {{- end }}
+  
+  # Custom Analysis Prompt
+  {{- if .Values.config.analysisPrompt }}
+  ANALYSIS_PROMPT_TEMPLATE: {{ .Values.config.analysisPrompt | quote }}
+  {{- end }}
+  
   PORT: {{ .Values.config.port | quote }}

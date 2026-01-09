@@ -15,8 +15,16 @@
   http://{{ include "k8flex.fullname" . }}.{{ .Release.Namespace }}.svc.cluster.local:{{ .Values.service.port }}/webhook
 
 ⚙️  Configuration:
+  - LLM Provider: {{ .Values.config.llm.provider | default "ollama" }}
+{{- if eq (.Values.config.llm.provider | default "ollama") "ollama" }}
   - Ollama URL: {{ .Values.config.ollama.url }}
   - Ollama Model: {{ .Values.config.ollama.model }}
+{{- end }}
+{{- if .Values.adapters.enabled }}
+  - Enabled Adapters: {{ .Values.adapters.enabled }}
+{{- else }}
+  - Enabled Adapters: All (alertmanager, pagerduty, grafana, datadog, opsgenie, victorops, newrelic)
+{{- end }}
 {{- if or .Values.slack.botToken .Values.slack.webhookUrl }}
   - Slack: ✅ Enabled
   {{- if .Values.slack.botToken }}
@@ -26,6 +34,9 @@
   {{- end }}
 {{- else }}
   - Slack: ⚠️  Not configured
+{{- end }}
+{{- if .Values.knowledgeBase.enabled }}
+  - Knowledge Base: ✅ Enabled
 {{- end }}
 
 📚 Next Steps:
@@ -47,39 +58,59 @@
 
 {{- end }}
 
-2. Configure Alertmanager to send webhooks:
-   Add this receiver to your Alertmanager configuration:
+2. Configure Your Alerting System(s):
 
-   🔐 First, get your webhook authentication token:
-   kubectl get secret {{ include "k8flex.fullname" . }}-secrets -n {{ .Release.Namespace }} -o jsonpath='{.data.WEBHOOK_AUTH_TOKEN}' | base64 -d && echo
+   K8flex webhook endpoint: http://{{ include "k8flex.fullname" . }}.{{ .Release.Namespace }}.svc.cluster.local:{{ .Values.service.port }}/webhook
 
-   Then configure Alertmanager:
+   📌 Alertmanager:
    receivers:
      - name: 'k8flex-ai-debug'
        webhook_configs:
          - url: 'http://{{ include "k8flex.fullname" . }}.{{ .Release.Namespace }}.svc.cluster.local:{{ .Values.service.port }}/webhook'
-           send_resolved: false
-           http_config:
-             authorization:
-               credentials: "<PASTE_YOUR_TOKEN_HERE>"
 
-3. Ensure Ollama is deployed:
+   📌 PagerDuty: Add Generic Webhook (v3) integration with above URL
+   📌 Grafana: Add webhook contact point with above URL  
+   📌 Datadog: Create webhook integration with above URL
+   📌 Opsgenie: Add outgoing webhook with above URL
+   📌 VictorOps: Add outgoing webhook with above URL
+   📌 New Relic: Add webhook notification channel with above URL
+
+   See docs/INTEGRATION.md for detailed setup instructions.
+
+{{- if not .Values.adapters.enabled }}
+
+3. Optional: Limit Enabled Adapters:
+   
+   Currently all alerting systems are enabled. To restrict which systems k8flex accepts:
+   
+   helm upgrade {{ .Release.Name }} ./helm/k8flex \
+     --namespace {{ .Release.Namespace }} \
+     --set adapters.enabled="alertmanager,pagerduty,grafana"
+
+{{- end }}
+
+{{- if eq (.Values.config.llm.provider | default "ollama") "ollama" }}
+
+4. Ensure Ollama is deployed:
    kubectl get service ollama -n ollama
 
-4. Test the webhook with authentication:
-   TOKEN=$(kubectl get secret {{ include "k8flex.fullname" . }}-secrets -n {{ .Release.Namespace }} -o jsonpath='{.data.WEBHOOK_AUTH_TOKEN}' | base64 -d)
+{{- end }}
+
+5. Test the webhook:
    
    kubectl run test-webhook --rm -i --restart=Never --image=curlimages/curl -- \
      curl -X POST http://{{ include "k8flex.fullname" . }}.{{ .Release.Namespace }}.svc.cluster.local:{{ .Values.service.port }}/webhook \
-     -H "Authorization: Bearer $TOKEN" \
      -H "Content-Type: application/json" \
-     -d '{"alerts":[{"status":"firing","labels":{"alertname":"Test"},"annotations":{"summary":"Test"}}]}'
+     -d @- << 'EOF'
+   {"alerts":[{"status":"firing","labels":{"alertname":"Test","namespace":"default","pod":"test-pod"},"annotations":{"summary":"Test alert"}}]}
+   EOF
 
 📖 Documentation:
-   - README: https://github.com/yourorg/k8flex
-   - Webhook Security: See WEBHOOK_SECURITY.md
-   - Slack Setup: See SLACK_SETUP.md
-   - Integration Guide: See INTEGRATION.md
+   - README: ../../README.md
+   - Adapter Configuration: ../../docs/ADAPTER_CONFIGURATION.md
+   - Integration Guide: ../../docs/INTEGRATION.md
+   - Webhook Examples: ../../examples/README.md
+   - Slack Setup: ../../docs/SLACK_SETUP.md
 
 🐛 Troubleshooting:
    kubectl logs -n {{ .Release.Namespace }} deployment/{{ include "k8flex.fullname" . }}

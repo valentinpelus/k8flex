@@ -1,9 +1,10 @@
 # K8flex - AI-Powered Kubernetes Debug Agent
 
-AI-powered incident response agent that receives Alertmanager webhooks and performs automated Kubernetes debugging. Learns from feedback and maintains a knowledge base for faster resolution.
+AI-powered incident response agent that receives webhooks from popular alerting systems and performs automated Kubernetes debugging. Learns from feedback and maintains a knowledge base for faster resolution.
 
 ## Features
 
+- **Multi-Source Webhooks**: Alertmanager, PagerDuty, Grafana, Datadog, Opsgenie, VictorOps, New Relic
 - **Automated Debugging**: Gathers logs, events, pod status, services, and network policies from Kubernetes
 - **Multi-LLM Support**: Ollama (self-hosted), OpenAI, Anthropic Claude, Google Gemini, or AWS Bedrock
 - **Real-Time Streaming**: Analysis streams progressively to Slack as it develops
@@ -38,7 +39,11 @@ docker build -t k8flex-agent:latest .
 kubectl apply -f k8s/deployment.yaml
 ```
 
-### 3. Configure Alertmanager
+### 3. Configure Alerting System
+
+K8flex supports webhooks from multiple alerting systems (Alertmanager, PagerDuty, Grafana, Datadog, Opsgenie, VictorOps, New Relic). Choose the one(s) you use:
+
+**Alertmanager (Prometheus):**
 
 ```yaml
 receivers:
@@ -47,7 +52,17 @@ receivers:
       - url: 'http://k8flex-agent.k8flex.svc.cluster.local:8080/webhook'
 ```
 
-Full setup: [INTEGRATION.md](INTEGRATION.md)
+**Optional: Limit Enabled Adapters**
+
+By default, all alerting systems are supported. To enable only specific ones:
+
+```bash
+export ENABLED_ADAPTERS=alertmanager,pagerduty,grafana
+```
+
+See [Adapter Configuration](docs/ADAPTER_CONFIGURATION.md) for all options.
+
+Full setup for each system: [INTEGRATION.md](docs/INTEGRATION.md)
 
 ### 4. Optional: Slack Integration
 

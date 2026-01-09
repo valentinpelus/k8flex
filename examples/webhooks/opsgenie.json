@@ -1,0 +1,36 @@
+{
+  "source": {
+    "name": "Kubernetes Monitoring",
+    "type": "integration"
+  },
+  "alert": {
+    "alertId": "abc123-def456-ghi789",
+    "message": "Service endpoints unavailable",
+    "status": "open",
+    "tags": [
+      "critical",
+      "kubernetes",
+      "production"
+    ],
+    "tinyId": "42",
+    "entity": "payment-service",
+    "alias": "payment-service-no-endpoints",
+    "createdAt": 1705315800000,
+    "updatedAt": 1705315800000,
+    "username": "kubernetes@example.com",
+    "userId": "user123",
+    "description": "Service payment-service in namespace production has no available endpoints for more than 5 minutes. All pods may be down or not passing health checks.",
+    "priority": "P1",
+    "details": {
+      "namespace": "production",
+      "service": "payment-service",
+      "cluster": "prod-cluster-02",
+      "alert_type": "ServiceNoEndpoints",
+      "available_endpoints": "0",
+      "expected_endpoints": "3"
+    }
+  },
+  "action": "Create",
+  "integrationId": "integration123",
+  "integrationName": "Kubernetes Alerts"
+}

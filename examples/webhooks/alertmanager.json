@@ -1,0 +1,43 @@
+{
+  "version": "4",
+  "groupKey": "{}:{alertname=\"PodCrashLooping\"}",
+  "truncatedAlerts": 0,
+  "status": "firing",
+  "receiver": "k8flex-webhook",
+  "groupLabels": {
+    "alertname": "PodCrashLooping"
+  },
+  "commonLabels": {
+    "alertname": "PodCrashLooping",
+    "namespace": "production",
+    "severity": "critical"
+  },
+  "commonAnnotations": {
+    "summary": "Pod is crash looping",
+    "description": "Pod has restarted more than 5 times in 10 minutes"
+  },
+  "externalURL": "https://alertmanager.example.com",
+  "alerts": [
+    {
+      "status": "firing",
+      "labels": {
+        "alertname": "PodCrashLooping",
+        "namespace": "production",
+        "pod": "api-server-xyz",
+        "container": "main",
+        "service": "api-server",
+        "severity": "critical",
+        "cluster": "prod-cluster-01"
+      },
+      "annotations": {
+        "summary": "Pod api-server-xyz is crash looping",
+        "description": "Container main in pod api-server-xyz has restarted 15 times in the last 10 minutes. This indicates a persistent failure.",
+        "runbook_url": "https://runbooks.example.com/pod-crash-looping"
+      },
+      "startsAt": "2024-01-15T10:25:00Z",
+      "endsAt": "0001-01-01T00:00:00Z",
+      "generatorURL": "https://prometheus.example.com/graph?g0.expr=rate%28kube_pod_container_status_restarts_total%5B15m%5D%29+%3E+0&g0.tab=1",
+      "fingerprint": "abc123def456"
+    }
+  ]
+}

@@ -1,0 +1,28 @@
+{
+  "id": "1234567890",
+  "title": "Pod Memory Usage Critical",
+  "body": "Pod memory usage has exceeded 95% for more than 10 minutes",
+  "last_updated": "2024-01-15T10:30:00+00:00",
+  "event_type": "metric_alert_monitor",
+  "alert_transition": "Triggered",
+  "alert_type": "error",
+  "priority": "normal",
+  "org": {
+    "id": "12345",
+    "name": "Example Org"
+  },
+  "tags": [
+    "namespace:production",
+    "pod_name:web-server-xyz",
+    "kube_service:web-server",
+    "cluster_name:prod-cluster",
+    "kube_deployment:web-server",
+    "env:production"
+  ],
+  "alert_scope": [
+    "namespace:production",
+    "pod_name:web-server-xyz"
+  ],
+  "url": "https://app.datadoghq.com/monitors/1234567890",
+  "aggregation_key": "pod:production:web-server-xyz"
+}

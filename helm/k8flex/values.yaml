@@ -91,6 +91,22 @@ config:
     # Provider: ollama, openai, anthropic (claude), gemini, bedrock (aws)
     provider: "ollama"
   
+  # Analysis Prompt Configuration
+  # Customize the AI analysis prompt template (optional)
+  # Available variables: {FEEDBACK_CONTEXT}, {FEEDBACK_INSTRUCTION}, {DEBUG_INFO}
+  # If not set, the default prompt will be used
+  # Example:
+  # analysisPrompt: |
+  #   You are a Kubernetes expert. Analyze this incident.
+  #   {FEEDBACK_CONTEXT}
+  #   ANALYSIS RULES:
+  #
+  #   Debug Information:
+  #   {DEBUG_INFO}
+  #   {FEEDBACK_INSTRUCTION}
+  #   Provide your analysis in markdown format.
+  analysisPrompt: ""
+  
   # Ollama settings (if provider=ollama)
   ollama:
     url: "http://ollama.ollama.svc.cluster.local:11434"
@@ -124,6 +140,27 @@ config:
   
   # Application port
   port: "8080"
+
+# Alerting System Adapters
+# Configure which alerting systems k8flex should accept webhooks from
+adapters:
+  # Enable all adapters by default (leave empty)
+  # Or specify comma-separated list: alertmanager,pagerduty,grafana,datadog,opsgenie,victorops,newrelic
+  # Examples:
+  #   enabled: "alertmanager"                              # Only Alertmanager
+  #   enabled: "alertmanager,grafana"                      # Alertmanager + Grafana  
+  #   enabled: "alertmanager,pagerduty,grafana,datadog"   # Multiple systems
+  #   enabled: ""                                          # All adapters (default)
+  enabled: ""
+  
+  # Available adapters:
+  # - alertmanager: Prometheus Alertmanager
+  # - pagerduty: PagerDuty incidents
+  # - grafana: Grafana Alerting
+  # - datadog: Datadog Monitors
+  # - opsgenie: Opsgenie alerts
+  # - victorops: VictorOps (Splunk On-Call)
+  # - newrelic: New Relic Alerts
 
 # Knowledge Base (Vector Database for similar case retrieval)
 knowledgeBase:

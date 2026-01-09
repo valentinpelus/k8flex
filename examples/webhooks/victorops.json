@@ -1,0 +1,13 @@
+{
+  "entity_id": "production/database-pod-xyz",
+  "entity_display_name": "Database Pod Issue",
+  "state_start_time": 1705315800,
+  "state_message": "Pod database-pod-xyz in production namespace is in CrashLoopBackOff state",
+  "monitoring_tool": "Kubernetes Monitoring",
+  "message_type": "CRITICAL",
+  "entity_state": "CRITICAL",
+  "alert_url": "https://portal.victorops.com/alert/abc123",
+  "current_phase": "UNACKED",
+  "vo_organization_id": "org123",
+  "vo_uuid": "incident-uuid-123"
+}

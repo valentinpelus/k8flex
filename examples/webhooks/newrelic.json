@@ -1,0 +1,36 @@
+{
+  "account_id": 123456,
+  "account_name": "Production Account",
+  "condition_id": 789012,
+  "condition_name": "Pod Container Restarts",
+  "current_state": "open",
+  "details": "Pod container has restarted more than 5 times in 10 minutes",
+  "event_type": "INCIDENT",
+  "incident_acknowledge_url": "https://alerts.newrelic.com/accounts/123456/incidents/42/acknowledge",
+  "incident_id": 42,
+  "incident_url": "https://alerts.newrelic.com/accounts/123456/incidents/42",
+  "owner": "kubernetes-team@example.com",
+  "policy_name": "Kubernetes Pod Health",
+  "policy_url": "https://alerts.newrelic.com/accounts/123456/policies/789",
+  "runbook_url": "https://runbooks.example.com/pod-restarts",
+  "severity": "CRITICAL",
+  "targets": [
+    {
+      "id": "entity123",
+      "name": "production:worker-pod-abc:worker-container",
+      "link": "https://one.newrelic.com/entity/entity123",
+      "product": "KUBERNETES",
+      "type": "POD",
+      "labels": {
+        "namespace": "production",
+        "pod": "worker-pod-abc",
+        "container": "worker-container",
+        "deployment": "worker"
+      }
+    }
+  ],
+  "timestamp": 1705315800000,
+  "timestamp_utc_string": "2024-01-15T10:30:00.000Z",
+  "violation_callback_url": "https://alerts.newrelic.com/api/v2/violations/callback",
+  "violation_chart_url": "https://chart-image.service.newrelic.com/chart/abc123.png"
+}

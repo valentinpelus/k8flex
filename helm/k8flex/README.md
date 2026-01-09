@@ -1,13 +1,22 @@
 # K8flex Helm Chart
 
-This Helm chart deploys the K8flex AI-powered Kubernetes debugging agent.
+This Helm chart deploys the K8flex AI-powered Kubernetes debugging agent with support for multiple alerting systems.
+
+## Features
+
+- 🤖 **AI-Powered Analysis**: Multi-LLM support (Ollama, OpenAI, Claude, Gemini, Bedrock)
+- 🔔 **Multi-Provider Webhooks**: Alertmanager, PagerDuty, Grafana, Datadog, Opsgenie, VictorOps, New Relic
+- 💬 **Slack Integration**: Real-time streaming with threading support
+- 📚 **Knowledge Base**: Optional vector database for similar case retrieval
+- 👍 **Feedback System**: Learn from user ratings
+- 🔒 **Production Ready**: RBAC, secrets management, resource limits
 
 ## Prerequisites
 
 - Kubernetes 1.19+
 - Helm 3.0+
-- Ollama deployed in your cluster
-- Alertmanager configured
+- At least one LLM provider configured (Ollama, OpenAI, Claude, Gemini, or AWS Bedrock)
+- At least one alerting system (Alertmanager, PagerDuty, Grafana, etc.)
 
 ## Installation
 
@@ -15,6 +24,22 @@ This Helm chart deploys the K8flex AI-powered Kubernetes debugging agent.
 
 ```bash
 helm install k8flex ./helm/k8flex --namespace k8flex --create-namespace
+```
+
+### Install with Specific Alerting Systems
+
+```bash
+# Only Alertmanager
+helm install k8flex ./helm/k8flex \
+  --namespace k8flex \
+  --create-namespace \
+  --set adapters.enabled="alertmanager"
+
+# Multiple systems
+helm install k8flex ./helm/k8flex \
+  --namespace k8flex \
+  --create-namespace \
+  --set adapters.enabled="alertmanager,pagerduty,grafana"
 ```
 
 ### Install with Slack Bot Token (Threading Support)
@@ -49,6 +74,8 @@ helm install k8flex ./helm/k8flex \
 
 The following table lists the configurable parameters of the K8flex chart and their default values.
 
+### Core Configuration
+
 | Parameter | Description | Default |
 |-----------|-------------|---------|
 | `replicaCount` | Number of replicas | `1` |
@@ -57,55 +84,159 @@ The following table lists the configurable parameters of the K8flex chart and th
 | `image.pullPolicy` | Image pull policy | `IfNotPresent` |
 | `service.type` | Service type | `ClusterIP` |
 | `service.port` | Service port | `8080` |
+
+### LLM Provider Configuration
+
+| Parameter | Description | Default |
+|-----------|-------------|---------|
+| `config.llm.provider` | LLM provider (ollama, openai, anthropic, gemini, bedrock) | `ollama` |
+| `config.analysisPrompt` | Custom AI analysis prompt template (optional) | `""` (uses default) |
 | `config.ollama.url` | Ollama API URL | `http://ollama.ollama.svc.cluster.local:11434` |
 | `config.ollama.model` | Ollama model to use | `llama3` |
-| `slack.botToken` | Slack Bot token for threading | `""` |
+| `config.openai.apiKey` | OpenAI API key (set in secrets.yaml) | `""` |
+| `config.openai.model` | OpenAI model | `gpt-4-turbo-preview` |
+| `config.anthropic.apiKey` | Anthropic API key (set in secrets.yaml) | `""` |
+| `config.anthropic.model` | Claude model | `claude-3-5-sonnet-20241022` |
+| `config.gemini.apiKey` | Google Gemini API key (set in secrets.yaml) | `""` |
+| `config.gemini.model` | Gemini model | `gemini-1.5-pro` |
+| `config.bedrock.region` | AWS Bedrock region | `us-east-1` |
+| `config.bedrock.model` | Bedrock model ID | `anthropic.claude-3-5-sonnet-20241022-v2:0` |
+
+### Alerting System Adapters
+
+| Parameter | Description | Default |
+|-----------|-------------|---------|
+| `adapters.enabled` | Comma-separated list of enabled adapters or empty for all | `""` (all enabled) |
+
+**Available adapters:**
+- `alertmanager` - Prometheus Alertmanager
+- `pagerduty` - PagerDuty incidents  
+- `grafana` - Grafana Alerting
+- `datadog` - Datadog Monitors
+- `opsgenie` - Opsgenie alerts
+- `victorops` - VictorOps (Splunk On-Call)
+- `newrelic` - New Relic Alerts
+
+**Examples:**
+- `adapters.enabled: "alertmanager"` - Only Alertmanager
+- `adapters.enabled: "alertmanager,pagerduty,grafana"` - Multiple systems
+- `adapters.enabled: ""` - All adapters (default)
+
+### Slack Integration
+
+| Parameter | Description | Default |
+|-----------|-------------|---------|
+| `slack.botToken` | Slack Bot token for threading (set in secrets.yaml) | `""` |
 | `slack.channelId` | Slack channel ID | `""` |
-| `slack.webhookUrl` | Slack webhook URL (alternative) | `""` |
+| `slack.workspaceId` | Slack workspace ID for links | `""` |
+| `slack.webhookUrl` | Slack webhook URL (alternative, no threading) | `""` |
+
+### Knowledge Base
+
+| Parameter | Description | Default |
+|-----------|-------------|---------|
+| `knowledgeBase.enabled` | Enable knowledge base | `false` |
+| `knowledgeBase.databaseUrl` | PostgreSQL connection URL (set in secrets.yaml) | `""` |
+| `knowledgeBase.embeddingProvider` | Embedding provider (openai, gemini) | `openai` |
+| `knowledgeBase.embeddingModel` | Embedding model | `text-embedding-3-small` |
+| `knowledgeBase.similarityThreshold` | Similarity threshold (0.0-1.0) | `0.75` |
+| `knowledgeBase.maxResults` | Max similar cases to retrieve | `5` |
+
+### Resources
+
+| Parameter | Description | Default |
+|-----------|-------------|---------|
 | `resources.limits.cpu` | CPU limit | `500m` |
 | `resources.limits.memory` | Memory limit | `512Mi` |
 | `resources.requests.cpu` | CPU request | `100m` |
 | `resources.requests.memory` | Memory request | `128Mi` |
+
+### RBAC & Security
+
+| Parameter | Description | Default |
+|-----------|-------------|---------|
 | `rbac.create` | Create RBAC resources | `true` |
 | `serviceAccount.create` | Create service account | `true` |
+| `webhook.authToken` | Webhook authentication token (set in secrets.yaml) | `""` |
 
 ## Examples
 
-### Development Environment
+### Single Alerting System (Alertmanager Only)
 
 ```yaml
-# dev-values.yaml
-image:
-  pullPolicy: Always
-  tag: "dev"
-
-resources:
-  limits:
-    cpu: 200m
-    memory: 256Mi
-  requests:
-    cpu: 50m
-    memory: 64Mi
+# alertmanager-only.yaml
+adapters:
+  enabled: "alertmanager"
 
 config:
+  llm:
+    provider: "ollama"
   ollama:
-    url: "http://ollama.development.svc.cluster.local:11434"
-    model: "mistral"  # Smaller, faster model
+    url: "http://ollama.ollama.svc.cluster.local:11434"
+    model: "llama3"
+
+slack:
+  botToken: "xoxb-YOUR-BOT-TOKEN"
+  channelId: "C01234567890"
 ```
 
 Deploy:
 ```bash
-helm install k8flex ./helm/k8flex -f dev-values.yaml -n k8flex --create-namespace
+helm install k8flex ./helm/k8flex -f alertmanager-only.yaml -n k8flex --create-namespace
 ```
 
-### Production Environment
+### Multi-Provider Setup
 
 ```yaml
-# prod-values.yaml
+# multi-provider.yaml
+adapters:
+  # Enable Alertmanager for infrastructure, PagerDuty for on-call, Grafana for apps
+  enabled: "alertmanager,pagerduty,grafana"
+
+config:
+  llm:
+    provider: "openai"
+  openai:
+    model: "gpt-4-turbo-preview"
+    # apiKey set in secrets.yaml
+
+slack:
+  botToken: "xoxb-YOUR-BOT-TOKEN"
+  channelId: "C01234567890"
+  workspaceId: "T01234567"
+```
+
+Deploy with secrets:
+```bash
+# First, create secrets.yaml with API keys
+helm install k8flex ./helm/k8flex \
+  -f multi-provider.yaml \
+  -f secrets.yaml \
+  -n k8flex --create-namespace
+```
+
+### Enterprise Setup (All Systems)
+
+```yaml
+# enterprise.yaml
 replicaCount: 3
 
-image:
-  tag: "1.0.0"
+adapters:
+  # Enable all alerting systems (default)
+  enabled: ""
+
+config:
+  llm:
+    provider: "anthropic"
+  anthropic:
+    model: "claude-3-5-sonnet-20241022"
+    # apiKey set in secrets.yaml
+
+knowledgeBase:
+  enabled: true
+  embeddingProvider: "openai"
+  embeddingModel: "text-embedding-3-small"
+  # databaseUrl set in secrets.yaml
 
 resources:
   limits:
@@ -114,15 +245,6 @@ resources:
   requests:
     cpu: 500m
     memory: 512Mi
-
-config:
-  ollama:
-    url: "http://ollama.production.svc.cluster.local:11434"
-    model: "llama2:70b"  # Larger, more accurate model
-
-slack:
-  botToken: "xoxb-production-token"
-  channelId: "C12345678"
 
 affinity:
   podAntiAffinity:
@@ -138,37 +260,125 @@ affinity:
           topologyKey: kubernetes.io/hostname
 ```
 
-Deploy:
-```bash
-helm install k8flex ./helm/k8flex -f prod-values.yaml -n k8flex --create-namespace
-```
-
 ## Upgrading
 
-### Update Configuration
+### Enable Additional Alerting Systems
 
 ```bash
+# Add PagerDuty and Grafana to existing Alertmanager setup
 helm upgrade k8flex ./helm/k8flex \
   --namespace k8flex \
-  --set config.ollama.model="llama3"
+  --set adapters.enabled="alertmanager,pagerduty,grafana"
 ```
 
-### Update Slack Credentials
+### Switch to All Adapters
 
 ```bash
+# Enable all alerting systems
 helm upgrade k8flex ./helm/k8flex \
   --namespace k8flex \
-  --set slack.botToken="xoxb-NEW-TOKEN" \
-  --set slack.channelId="C98765432"
+  --set adapters.enabled=""
 ```
 
-### Upgrade with New Image
+### Update LLM Provider
 
 ```bash
+# Switch from Ollama to OpenAI
 helm upgrade k8flex ./helm/k8flex \
   --namespace k8flex \
-  --set image.tag="1.1.0"
+  --set config.llm.provider="openai" \
+  --set config.openai.apiKey="sk-..."
 ```
+
+## Custom Analysis Prompts
+
+You can customize the AI analysis prompt to tailor the behavior to your specific needs. The prompt supports three variables:
+
+- `{FEEDBACK_CONTEXT}` - Automatically injected feedback from past incidents
+- `{DEBUG_INFO}` - The collected Kubernetes debug information
+- `{FEEDBACK_INSTRUCTION}` - Additional instruction when feedback is available
+
+### Example: Custom Prompt via values.yaml
+
+```yaml
+config:
+  analysisPrompt: |
+    You are a Senior Kubernetes SRE. Analyze this production incident.
+    {FEEDBACK_CONTEXT}
+    
+    Critical Analysis Requirements:
+    1. Identify the root cause with evidence
+    2. Assess business impact
+    3. Provide immediate remediation steps
+    4. Suggest preventive measures
+    
+    Debug Information:
+    {DEBUG_INFO}
+    {FEEDBACK_INSTRUCTION}
+    
+    Respond in this format:
+    *Root Cause:* ...
+    *Impact:* ...
+    *Remediation:* ...
+    *Prevention:* ...
+```
+
+### Example: Short & Focused Prompt
+
+```yaml
+config:
+  analysisPrompt: |
+    Analyze this Kubernetes issue. Be brief and actionable.
+    {FEEDBACK_CONTEXT}
+    Data: {DEBUG_INFO}
+    {FEEDBACK_INSTRUCTION}
+    
+    Format:
+    *Problem:* ...
+    *Fix:* ...
+```
+
+### Example: Security-Focused Prompt
+
+```yaml
+config:
+  analysisPrompt: |
+    Security Incident Analysis - Kubernetes Cluster
+    {FEEDBACK_CONTEXT}
+    
+    Analyze for:
+    - Security implications
+    - Compliance impact  
+    - Data exposure risks
+    - Attack vectors
+    
+    Debug Data: {DEBUG_INFO}
+    {FEEDBACK_INSTRUCTION}
+    
+    Response:
+    *Security Assessment:* ...
+    *Risk Level:* ...
+    *Immediate Actions:* ...
+    *Security Hardening:* ...
+```
+
+### Deploy with Custom Prompt
+
+```bash
+# Using values file
+helm install k8flex ./helm/k8flex \
+  --namespace k8flex \
+  --create-namespace \
+  -f custom-prompt-values.yaml
+
+# Using --set (for short prompts)
+helm install k8flex ./helm/k8flex \
+  --namespace k8flex \
+  --create-namespace \
+  --set 'config.analysisPrompt=Brief analysis: {DEBUG_INFO}'
+```
+
+**Note:** All LLM providers (Ollama, OpenAI, Claude, Gemini, Bedrock) share the same prompt template. The custom prompt applies across all providers consistently.
 
 ## Uninstallation
 
@@ -197,9 +407,11 @@ kubectl logs -n k8flex deployment/k8flex-k8flex-agent -f
 kubectl exec -n k8flex deployment/k8flex-k8flex-agent -- wget -qO- http://localhost:8080/health
 ```
 
-## Integration with Alertmanager
+## Integration with Alerting Systems
 
-After installing, configure Alertmanager to send webhooks to K8flex:
+After installing, configure your alerting systems to send webhooks to K8flex.
+
+### Alertmanager (Prometheus)
 
 ```yaml
 # alertmanager.yaml
@@ -216,6 +428,46 @@ route:
       receiver: 'k8flex-ai-debug'
       continue: true
 ```
+
+### PagerDuty
+
+1. Go to **Services** > Select service > **Integrations**
+2. Add **Generic Webhooks (v3)**
+3. URL: `http://k8flex-k8flex.k8flex.svc.cluster.local:8080/webhook`
+4. Enable **Trigger** events
+
+### Grafana
+
+1. Go to **Alerting** > **Contact points**
+2. Add **webhook** type
+3. URL: `http://k8flex-k8flex.k8flex.svc.cluster.local:8080/webhook`
+
+### Datadog
+
+1. **Integrations** > **Webhooks**
+2. Name: `k8flex-debug`
+3. URL: `http://k8flex-k8flex.k8flex.svc.cluster.local:8080/webhook`
+4. Add `@webhook-k8flex-debug` to monitor notifications
+
+### Opsgenie
+
+1. **Settings** > **Integrations** > **Outgoing Webhooks**
+2. URL: `http://k8flex-k8flex.k8flex.svc.cluster.local:8080/webhook`
+3. Trigger: **Alert Created**
+
+### VictorOps (Splunk On-Call)
+
+1. **Settings** > **Outgoing Webhooks**
+2. Event: **Incident Triggered**
+3. URL: `http://k8flex-k8flex.k8flex.svc.cluster.local:8080/webhook`
+
+### New Relic
+
+1. **Alerts & AI** > **Notification channels**
+2. Type: **Webhook**
+3. URL: `http://k8flex-k8flex.k8flex.svc.cluster.local:8080/webhook`
+
+See [../../docs/INTEGRATION.md](../../docs/INTEGRATION.md) for detailed setup instructions.
 
 ## Troubleshooting
 

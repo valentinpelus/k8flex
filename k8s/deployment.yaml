@@ -68,6 +68,14 @@ data:
   OLLAMA_URL: "http://ollama.ollama.svc.cluster.local:11434"
   OLLAMA_MODEL: "llama3"
   PORT: "8080"
+  # ENABLED_ADAPTERS: Configure which alerting systems to support
+  # Options: alertmanager, pagerduty, grafana, datadog, opsgenie, victorops, newrelic
+  # Leave empty or comment out to enable all adapters (default)
+  # Examples:
+  #   ENABLED_ADAPTERS: "alertmanager"                              # Only Alertmanager
+  #   ENABLED_ADAPTERS: "alertmanager,grafana"                      # Alertmanager + Grafana
+  #   ENABLED_ADAPTERS: "alertmanager,pagerduty,grafana,datadog"   # Multiple systems
+  # ENABLED_ADAPTERS: ""
   # SLACK_WEBHOOK_URL: ""  # Set this via Secret or uncomment and add your webhook URL
 ---
 # Optional: Use a Secret for Slack credentials (recommended)
